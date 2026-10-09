@@ -1,0 +1,40 @@
+{
+  "name": "fieldline-construction-tracker",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:web": "vite --host localhost",
+    "dev:api": "tsx watch server/index.ts",
+    "build": "vite build",
+    "start": "tsx server/index.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.server.json",
+    "test:db": "tsx --test server/db/schema.test.ts",
+    "test:api": "tsx --test server/api/integration.test.ts server/mail/send-mail.test.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx server/db/migrate.ts",
+    "db:check": "drizzle-kit check",
+    "owner:create": "tsx scripts/create-owner.ts"
+  },
+  "dependencies": {
+    "@better-auth/drizzle-adapter": "1.7.7",
+    "better-auth": "1.7.7",
+    "better-sqlite3": "13.0.3",
+    "dotenv": "18.0.5",
+    "drizzle-orm": "0.45.3",
+    "express": "5.2.1",
+    "tsx": "4.23.15",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "*",
+    "@types/express": "*",
+    "@types/node": "*",
+    "drizzle-kit": "0.31.11",
+    "typescript": "^5.9.3",
+    "vite": "8.3.2"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
