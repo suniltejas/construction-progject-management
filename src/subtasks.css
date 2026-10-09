@@ -1,0 +1,56 @@
+.subtask-list {
+  margin: 12px 0 2px;
+  padding-left: 12px;
+  border-left: 2px solid #dbe7e8;
+}
+
+.subtask-summary {
+  display: block;
+  margin-bottom: 5px;
+  color: #718992;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.subtask-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 29px;
+  color: #3d5664;
+}
+
+.subtask-item .task-check {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+}
+
+.subtask-state {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  width: 17px;
+  flex: none;
+  color: #548b76;
+}
+
+.subtask-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.subtask-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.subtask-body small { color: #81949c; font-size: 11px; }
+
+.subtask-name.done {
+  text-decoration: line-through;
+  color: #85989d;
+}
+
+.subtask-item .badge { margin-left: auto; }
+.subtask-item .icon-button { font-size: 16px; }
+.add-subtask { display: block; margin-top: 10px; font-size: 11px; }
+.subtask-parent { margin: -8px 0 17px; color: #607b85; font-size: 13px; }
+.subtask-inherits { font-size: 12px; line-height: 1.45; margin: -4px 0 16px; }

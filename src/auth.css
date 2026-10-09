@@ -1,0 +1,36 @@
+.auth-screen{min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at 15% 10%,#355669 0,#172c3c 45%,#102633 100%)}
+.auth-card{width:min(440px,100%);padding:34px;background:#fff;border-radius:12px;box-shadow:0 24px 70px #07192755}
+.auth-card h1{font-size:28px;letter-spacing:-.04em;margin:0 0 8px;color:#1d3544}
+.auth-brand{display:flex;align-items:center;gap:12px;font-size:22px;font-weight:750;color:#172c3c;margin-bottom:32px}
+.auth-brand small{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:#80959f}
+.auth-brand .brand-mark{width:35px;height:35px;font-size:21px}
+.auth-intro{font-size:13px;line-height:1.6;color:#69808b;margin:0 0 24px}
+.auth-card label{display:block;color:#3d5664;font-size:12px;font-weight:700;margin-bottom:17px}
+.auth-card input{display:block;width:100%;margin-top:8px;padding:12px 13px;border:1px solid #cfdbdf;border-radius:6px;background:#fff;color:#1d3848;font-size:14px}
+.auth-card .button.primary{width:100%;margin-top:7px;padding:12px}
+.auth-error{background:#fae9e7;color:#9e3c37;border-radius:6px;padding:10px 12px;font-size:12px}
+.auth-notice{background:#e8f3ec;color:#2b7354;border-radius:6px;padding:10px 12px;font-size:12px}
+.account-name{color:#526c79;font-weight:700;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.role-label{display:inline-block;text-transform:capitalize;font-size:11px;font-weight:750;color:#dba73e;margin-left:6px}
+.viewer-project-hero{grid-template-columns:1fr}
+.viewer-project-hero .hero-progress{border-left:0;padding-left:0}
+.viewer-table table{min-width:0}
+.assignee-fieldset{border:1px solid #dbe5e8;border-radius:7px;padding:12px;margin:0 0 17px}
+.assignee-fieldset legend{font-size:12px;font-weight:700;color:#3d5664;padding:0 4px}
+.assignee-options{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;max-height:140px;overflow:auto}
+dialog .assignee-option{display:flex;align-items:center;gap:8px;margin:0;padding:5px 0;cursor:pointer}
+dialog .assignee-option input{width:auto;margin:0;flex:none}
+.assignee-option span{font-size:12px;font-weight:700;color:#284555}
+.assignee-option small{display:block;font-size:10px;text-transform:capitalize;color:#8ba0a9;font-weight:500}
+.members-dialog-body{padding:28px 30px 25px}
+.members-dialog-body h3{font-size:14px;margin:18px 0 12px;color:#243e4e}
+.members-dialog-body form{padding:0;border-top:1px solid #e6eced;margin-top:22px}
+.members-dialog-body label{display:block;color:#3d5664;font-size:12px;font-weight:700;margin-bottom:16px}
+.members-dialog-body input,.members-dialog-body select{width:100%;margin-top:7px;padding:11px 12px;border:1px solid #cfdbdf;border-radius:6px;background:#fff;color:#1d3848;font-size:13px}
+.member-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid #edf1f2}
+.member-row strong{display:block;font-size:13px;color:#243e4e}
+.member-row span{font-size:11px;color:#82949d}
+.member-controls{display:flex;align-items:center;gap:7px}
+.member-controls select{margin:0;width:auto;padding:6px;font-size:11px}
+@media(max-width:760px){.account-name{display:none}.top-actions{gap:5px}.top-actions #signOutButton{padding:8px}.auth-card{padding:25px}.assignee-options{grid-template-columns:1fr}}
+@media(max-width:480px){#refreshButton{display:none}}
