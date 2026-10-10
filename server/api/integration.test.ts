@@ -7,8 +7,8 @@ import { basename, join, resolve, sep } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import Database from 'better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
+import Database from 'better-sqlite3';
 
 const projectRoot = fileURLToPath(new URL('../../', import.meta.url));
 const migrationsFolder = fileURLToPath(new URL('../../drizzle/', import.meta.url));
@@ -93,16 +93,12 @@ test('project API enforces username auth, invitations and project roles', { time
     return result.cookie;
   };
   const issueInvitation = async (projectId: string, username: string, email: string, role: 'editor' | 'viewer', cookie: string) => {
-    const before = output.length;
     const issued = await expectStatus(`/projects/${projectId}/invitations`, 201, {
       method: 'POST', cookie, body: { username, email, role },
     });
-    for (let attempt = 0; attempt < 40; attempt++) {
-      const match = output.slice(before).match(/\/projects\/\?invite=([A-Za-z0-9_-]+)/);
-      if (match) return { token: match[1], id: issued.data.id as string };
-      await delay(25);
-    }
-    throw new Error(`Invitation link was not logged in local development. Output: ${output}`);
+    const match = String(issued.data.inviteUrl).match(/invite=([A-Za-z0-9_-]+)/);
+    assert.match(String(issued.data.inviteUrl), /invite=([A-Za-z0-9_-]+)/, `No creation link returned: ${JSON.stringify(issued.data)}`);
+    return { token: match![1], id: issued.data.id as string };
   };
   const invitationToken = async (projectId: string, username: string, email: string, role: 'editor' | 'viewer', cookie: string) =>
     (await issueInvitation(projectId, username, email, role, cookie)).token;

@@ -11,7 +11,7 @@ const migrationsFolder = fileURLToPath(new URL('../../drizzle/', import.meta.url
 
 function freshDatabase(): Database.Database {
   const sqlite = new Database(':memory:');
-  sqlite.pragma('foreign_keys = ON');
+  sqlite.exec(`PRAGMA foreign_keys = ON`);
   migrate(drizzle(sqlite, { schema: { ...authSchema, ...appSchema } }), { migrationsFolder });
   sqlite.exec(`
     INSERT INTO user (id, name, email, username) VALUES

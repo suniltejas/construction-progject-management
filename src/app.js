@@ -566,12 +566,27 @@ import { authClient, hideAuthScreen, showAuthScreen } from './auth-ui.js';
     const button = event.target.querySelector('button[type="submit"]');
     button.disabled = true;
     try {
-      await api.invite(projectId, values);
+      const invite = await api.invite(projectId, values);
       renderMembers(projectId, await api.members(projectId));
       event.target.reset();
-      toast(`Invitation sent to ${values.email}`);
+      showInviteLink(invite.inviteUrl);
     } catch (error) { showFormError(event.target, error.message); }
     finally { button.disabled = false; }
+  });
+
+  function showInviteLink(inviteUrl) {
+    $('#inviteLinkField').value = inviteUrl;
+    $('#inviteLinkDialog').showModal();
+  }
+
+  $('#copyInviteLinkButton').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText($('#inviteLinkField').value);
+      toast('Creation link copied');
+    } catch {
+      try { $('#inviteLinkField').select(); } catch { /* noop */ }
+      toast('Select the link, then copy it');
+    }
   });
 
   $('#overviewNav').addEventListener('click', () => { selectedProjectId = null; render(); });

@@ -32,7 +32,9 @@
 
   <dialog id="membersDialog" aria-labelledby="membersDialogTitle"><div class="members-dialog-body"><div class="dialog-head"><div><p class="eyebrow">Project access</p><h2 id="membersDialogTitle">People</h2></div><button class="icon-button" type="button" data-close="membersDialog" aria-label="Close">×</button></div><div id="membersList"></div><form id="inviteForm"><h3>Invite someone</h3><div class="form-grid"><label>Username<input name="username" required minlength="3" maxlength="30" autocomplete="off" pattern="[A-Za-z0-9._-]+" placeholder="e.g. maya.patel"></label><label>Email for invitation<input name="email" required type="email" autocomplete="email" placeholder="name@example.com"></label></div><label>Project role<select name="role"><option value="editor">Editor — view and edit all tasks</option><option value="viewer">Viewer — assigned tasks only</option></select></label><div class="dialog-actions"><button class="button primary" type="submit">Send invitation</button></div></form></div></dialog>
 
-  <div id="toast" role="status" aria-live="polite"></div>
-  <script type="module" src="/src/app.js"></script>
+   <dialog id="inviteLinkDialog" aria-labelledby="inviteLinkDialogTitle"><div class="invite-link-dialog"><div class="dialog-head"><div><p class="eyebrow">Project access</p><h2 id="inviteLinkDialogTitle">Share the creation link</h2></div><button class="icon-button" type="button" data-close="inviteLinkDialog" aria-label="Close">×</button></div><p class="subhead" id="inviteLinkIntro">Send this link to the person so they can create their account and join the project.</p><div class="invite-link-row"><input id="inviteLinkField" type="text" readonly aria-label="Creation link"><button class="button primary" id="copyInviteLinkButton" type="button">Copy link</button></div><div class="dialog-actions"><button class="button subtle" type="button" data-close="inviteLinkDialog">Close</button></div></div></dialog>
+
+   <div id="toast" role="status" aria-live="polite"></div>
+   <script type="module" src="/src/app.js"></script>
 </body>
 </html>
