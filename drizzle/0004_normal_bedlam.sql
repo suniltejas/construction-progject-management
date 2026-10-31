@@ -1,0 +1,1 @@
+ALTER TABLE `subtasks` ADD `crew_label` text DEFAULT '' NOT NULL;

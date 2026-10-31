@@ -15,6 +15,7 @@
     "db:migrate": "tsx server/db/migrate.ts",
     "db:check": "drizzle-kit check",
     "owner:create": "tsx scripts/create-owner.ts",
+    "reset-password": "tsx scripts/reset-password.ts",
     "mail:test": "tsx scripts/send-test-mail.ts"
   },
   "dependencies": {

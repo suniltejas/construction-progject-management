@@ -91,6 +91,7 @@ export const subtasks = sqliteTable('subtasks', {
   name: text('name').notNull(),
   due: text('due'),
   ownerAssigneeId: text('owner_assignee_id'),
+  crewLabel: text('crew_label').notNull().default(''),
   status: text('status').notNull().default('Not started'),
   version: integer('version').notNull().default(1),
   createdAt: text('created_at').notNull().default(sql`(CURRENT_TIMESTAMP)`),

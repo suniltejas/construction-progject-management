@@ -64,12 +64,14 @@ export const subtaskInput = z.strictObject({
   name: required(200),
   due: date,
   ownerAssigneeId: required(100),
+  crewLabel: text(160).default(''),
   status: z.enum(['Not started', 'In progress', 'Blocked', 'Done']).default('Not started'),
 });
 export const subtaskPatch = z.strictObject({
   name: required(200).optional(),
   due: date.optional(),
   ownerAssigneeId: text(100).optional(),
+  crewLabel: text(160).optional(),
   status: z.enum(['Not started', 'In progress', 'Blocked', 'Done']).optional(),
   version: z.number().int().positive(),
 });

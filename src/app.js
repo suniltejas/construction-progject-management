@@ -186,7 +186,7 @@ import { authClient, hideAuthScreen, showAuthScreen } from './auth-ui.js';
     const controls = editable ? `<div class="row-actions"><input class="task-check" type="checkbox" data-toggle-task="${escapeHtml(task.id)}" ${task.status === 'Done' ? 'checked' : ''} aria-label="Mark ${escapeHtml(task.name)} done"><button class="icon-button" type="button" data-edit-task="${escapeHtml(task.id)}" aria-label="Edit ${escapeHtml(task.name)}">⋯</button></div>` : '';
     const children = data.subtasks.filter((subtask) => subtask.taskId === task.id);
     const doneCount = children.filter((subtask) => subtask.status === 'Done').length;
-    const childRows = children.map((subtask) => `<div class="subtask-item" role="listitem"><span class="subtask-state">${editable ? `<input class="task-check" type="checkbox" data-toggle-subtask="${escapeHtml(subtask.id)}" ${subtask.status === 'Done' ? 'checked' : ''} aria-label="Mark ${escapeHtml(subtask.name)} done">` : subtask.status === 'Done' ? '✓' : '○'}</span><span class="subtask-body"><span class="subtask-name ${subtask.status === 'Done' ? 'done' : ''}">${escapeHtml(subtask.name)}</span><small>Owner: ${escapeHtml(subtaskOwnerLabel(subtask))} · Due ${formatDate(subtask.due || task.due)}</small></span>${badge(subtask.status)}${editable ? `<button class="icon-button" type="button" data-edit-subtask="${escapeHtml(subtask.id)}" aria-label="Edit subtask ${escapeHtml(subtask.name)}">⋯</button>` : ''}</div>`).join('');
+    const childRows = children.map((subtask) => `<div class="subtask-item" role="listitem"><span class="subtask-state">${editable ? `<input class="task-check" type="checkbox" data-toggle-subtask="${escapeHtml(subtask.id)}" ${subtask.status === 'Done' ? 'checked' : ''} aria-label="Mark ${escapeHtml(subtask.name)} done">` : subtask.status === 'Done' ? '✓' : '○'}</span><span class="subtask-body"><span class="subtask-name ${subtask.status === 'Done' ? 'done' : ''}">${escapeHtml(subtask.name)}</span><small>Owner: ${escapeHtml(subtaskOwnerLabel(subtask))}${subtask.crewLabel ? ` · ${escapeHtml(subtask.crewLabel)}` : ''} · Due ${formatDate(subtask.due || task.due)}</small></span>${badge(subtask.status)}${editable ? `<button class="icon-button" type="button" data-edit-subtask="${escapeHtml(subtask.id)}" aria-label="Edit subtask ${escapeHtml(subtask.name)}">⋯</button>` : ''}</div>`).join('');
     const childList = children.length ? `<div class="subtask-list"><span class="subtask-summary">Subtasks · ${doneCount}/${children.length} done</span><div role="list">${childRows}</div></div>` : '';
     const addSubtask = editable ? `<button class="text-button add-subtask" type="button" data-add-subtask="${escapeHtml(task.id)}">＋ Add subtask</button>` : '';
     return `<tr><td><strong>${escapeHtml(task.name)}</strong><span class="secondary">Milestone: ${escapeHtml(milestones.find((milestone) => milestone.id === task.milestoneId)?.name || 'Unknown milestone')}</span><span class="secondary priority ${escapeHtml((task.priority || 'Normal').toLowerCase())}">${escapeHtml(task.priority || 'Normal')} priority</span>${childList}${addSubtask}</td><td>${escapeHtml(taskOwnerLabel(task))}</td><td>${formatDate(task.due)}${children.length ? '<span class="secondary">From subtasks</span>' : ''}${task.status !== 'Done' && daysUntil(task.due) < 0 ? '<span class="secondary" style="color:#b54a43">Overdue</span>' : ''}</td><td>${badge(task.status)}</td><td>${controls}</td></tr>`;
@@ -348,6 +348,7 @@ import { authClient, hideAuthScreen, showAuthScreen } from './auth-ui.js';
       }).join('')}`;
       form.elements.ownerAssigneeId.value = item?.ownerAssigneeId || '';
     } catch (error) { toast(error.message); return; }
+    form.elements.crewLabel.value = item?.crewLabel || '';
     form.elements.status.value = item?.status || 'Not started';
     $('#subtaskParent').textContent = `Under ${task.name}`;
     $('#subtaskDialogTitle').textContent = item ? 'Edit subtask' : 'New subtask';
@@ -529,7 +530,7 @@ import { authClient, hideAuthScreen, showAuthScreen } from './auth-ui.js';
   $('#subtaskForm').addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = event.target;
-    const { id, taskId, name, due, ownerAssigneeId, status } = Object.fromEntries(new FormData(form));
+    const { id, taskId, name, due, ownerAssigneeId, crewLabel, status } = Object.fromEntries(new FormData(form));
     const task = data.tasks.find((item) => item.id === taskId);
     if (!task || !canEditTasks(task.projectId)) return;
     const button = form.querySelector('button[type="submit"]');
@@ -539,10 +540,10 @@ import { authClient, hideAuthScreen, showAuthScreen } from './auth-ui.js';
         const subtask = data.subtasks.find((item) => item.id === id && item.taskId === taskId);
         if (!subtask) throw new Error('Subtask changed elsewhere. Refresh and try again');
         await runMutation(() => api.update('subtask', id, {
-          name, due, ownerAssigneeId, status, version: subtask.version,
+          name, due, ownerAssigneeId, crewLabel, status, version: subtask.version,
         }), 'Subtask saved');
       } else {
-        await runMutation(() => api.create('subtask', { taskId, name, due, ownerAssigneeId, status }), 'Subtask added');
+        await runMutation(() => api.create('subtask', { taskId, name, due, ownerAssigneeId, crewLabel, status }), 'Subtask added');
       }
       $('#subtaskDialog').close();
     } catch (error) { showFormError(form, error.message); }

@@ -242,8 +242,9 @@ test('project API enforces username auth, invitations and project roles', { time
       const visible = (await expectStatus('/subtasks', 201, {
         method: 'POST', cookie: editorCookie,
         body: { taskId: assigned.id, name: 'Pour concrete', due: '2026-07-10',
-          ownerAssigneeId: viewer.userId, status: 'Not started' },
+          ownerAssigneeId: viewer.userId, crewLabel: 'Concrete crew', status: 'Not started' },
       })).data;
+      assert.equal(visible.crewLabel, 'Concrete crew');
       const privateChild = (await expectStatus('/subtasks', 201, {
         method: 'POST', cookie: ownerCookie,
         body: { taskId: hidden.id, name: 'Inspect another area', due: '2026-06-10',
@@ -256,6 +257,7 @@ test('project API enforces username auth, invitations and project roles', { time
       assert.deepEqual(viewerWorkspace.subtasks.map((item: Json) => item.id), [visible.id]);
       assert.equal(viewerWorkspace.subtasks[0].taskId, assigned.id);
       assert.equal(viewerWorkspace.subtasks[0].ownerAssigneeId, viewer.userId);
+      assert.equal(viewerWorkspace.subtasks[0].crewLabel, 'Concrete crew');
       const childOnlyParent = (await expectStatus('/tasks', 201, {
         method: 'POST', cookie: ownerCookie,
         body: taskInput(projectA.id, milestoneA.id, 'Subtask-owned parent', []),
