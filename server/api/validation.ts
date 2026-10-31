@@ -83,6 +83,7 @@ export const inviteInput = z.strictObject({
 });
 export const acceptInput = z.strictObject({ token: required(200), password: z.string().optional() });
 export const memberPatch = z.strictObject({ role: z.enum(['editor', 'viewer']) });
+export const noteBodyInput = z.strictObject({ body: text(5000).min(1) });
 
 export function parse<T extends z.ZodType>(schema: T, input: unknown): z.output<T> {
   const result = schema.safeParse(input);

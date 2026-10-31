@@ -43,6 +43,8 @@ test('project API enforces username auth, invitations and project roles', { time
   const env = {
     ...process.env,
     DATABASE_PATH: join(directory, 'test.sqlite'),
+    FILES_DIR: join(directory, 'files'),
+    FILES_MAX_BYTES: '2048',
     APP_ORIGIN: origin,
     BETTER_AUTH_SECRET: 'integration-test-secret-at-least-32-bytes-long',
     NODE_ENV: 'development',
@@ -79,6 +81,20 @@ test('project API enforces username auth, invitations and project roles', { time
       catch { data = { raw }; }
     }
     return { status: response.status, data, cookie: sessionCookie(response) };
+  };
+  const upload = async (path: string, form: FormData, cookie: string) => {
+    const response = await fetch(`${origin}/projects/api${path}`, {
+      method: 'POST',
+      headers: { origin, cookie },
+      body: form,
+    });
+    const raw = await response.text();
+    let data: Json = {};
+    if (raw) {
+      try { data = JSON.parse(raw) as Json; }
+      catch { data = { raw }; }
+    }
+    return { status: response.status, data };
   };
   const expectStatus = async (path: string, status: number, options: { method?: string; body?: Json; cookie?: string } = {}) => {
     const result = await request(path, options);
@@ -316,6 +332,90 @@ test('project API enforces username auth, invitations and project roles', { time
       await expectStatus(`/subtasks/${privateChild.id}`, 204, { method: 'DELETE', cookie: ownerCookie });
       const fullyRestored = (await expectStatus('/workspace', 200, { cookie: ownerCookie })).data;
       assert.equal(fullyRestored.milestones.find((item: Json) => item.id === milestoneHidden.id).due, '2026-05-01');
+    });
+
+    await t.test('notes and files respect roles and round-trip data', async () => {
+      const note = (await expectStatus(`/tasks/${assigned.id}/notes`, 201, {
+        method: 'POST', cookie: editorCookie, body: { body: 'Ordered extra rebar' },
+      })).data;
+      assert.equal(note.parentType, 'task');
+      assert.equal(note.parentId, assigned.id);
+      assert.equal(note.body, 'Ordered extra rebar');
+      assert.equal(note.authorUsername, 'editor1');
+
+      await expectStatus(`/tasks/${assigned.id}/notes`, 403, {
+        method: 'POST', cookie: viewerCookie, body: { body: 'not allowed' },
+      });
+      await expectStatus(`/tasks/${assigned.id}/notes`, 404, {
+        method: 'POST', cookie: outsiderCookie, body: { body: 'other project' },
+      });
+
+      const viewerNotes = (await expectStatus('/workspace', 200, { cookie: viewerCookie })).data;
+      assert(viewerNotes.notes.some((entry: Json) => entry.id === note.id));
+      const ownerNotes = (await expectStatus('/workspace', 200, { cookie: ownerCookie })).data;
+      assert(ownerNotes.notes.some((entry: Json) => entry.id === note.id));
+
+      const child = (await expectStatus('/subtasks', 201, {
+        method: 'POST', cookie: editorCookie,
+        body: { taskId: assigned.id, name: 'Note child', due: '2026-07-20', ownerAssigneeId: editor.userId },
+      })).data;
+      const childNote = (await expectStatus(`/subtasks/${child.id}/notes`, 201, {
+        method: 'POST', cookie: editorCookie, body: { body: 'Subtask detail' },
+      })).data;
+      assert.equal(childNote.parentType, 'subtask');
+      assert.equal(childNote.parentId, child.id);
+
+      await expectStatus(`/notes/${note.id}`, 204, { method: 'DELETE', cookie: ownerCookie });
+      const afterNoteDelete = (await expectStatus('/workspace', 200, { cookie: ownerCookie })).data;
+      assert(!afterNoteDelete.notes.some((entry: Json) => entry.id === note.id));
+
+      const pngBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
+      const pngForm = () => {
+        const form = new FormData();
+        form.append('file', new Blob([pngBytes], { type: 'image/png' }), 'site-plan.png');
+        return form;
+      };
+      const uploaded = await upload(`/tasks/${assigned.id}/files`, pngForm(), editorCookie);
+      assert.equal(uploaded.status, 201, JSON.stringify(uploaded.data));
+      const fileId = uploaded.data.id as string;
+      assert.equal(uploaded.data.originalName, 'site-plan.png');
+      assert.equal(uploaded.data.mimeType, 'image/png');
+      assert.equal(uploaded.data.sizeBytes, pngBytes.length);
+
+      const viewerFiles = (await expectStatus('/workspace', 200, { cookie: viewerCookie })).data;
+      assert(viewerFiles.files.some((entry: Json) => entry.id === fileId));
+
+      const download = await fetch(`${origin}/projects/api/files/${fileId}`, { headers: { origin, cookie: viewerCookie } });
+      assert.equal(download.status, 200);
+      assert.equal(download.headers.get('content-type'), 'image/png');
+      assert.deepEqual([...new Uint8Array(await download.arrayBuffer())], [...pngBytes]);
+
+      const viewerUpload = await upload(`/tasks/${assigned.id}/files`, pngForm(), viewerCookie);
+      assert.equal(viewerUpload.status, 403, JSON.stringify(viewerUpload.data));
+
+      const badForm = new FormData();
+      badForm.append('file', new Blob([new Uint8Array([1, 2, 3])], { type: 'application/zip' }), 'archive.zip');
+      const bad = await upload(`/tasks/${assigned.id}/files`, badForm, editorCookie);
+      assert.equal(bad.status, 400, JSON.stringify(bad.data));
+
+      const bigForm = new FormData();
+      bigForm.append('file', new Blob([new Uint8Array(4096)], { type: 'image/png' }), 'big.png');
+      const big = await upload(`/tasks/${assigned.id}/files`, bigForm, editorCookie);
+      assert.equal(big.status, 413, JSON.stringify(big.data));
+
+      const pdfForm = new FormData();
+      pdfForm.append('file', new Blob([new Uint8Array([37, 80, 68, 70])], { type: 'application/pdf' }), 'drawing.pdf');
+      const milestoneUpload = await upload(`/milestones/${milestoneA.id}/files`, pdfForm, ownerCookie);
+      assert.equal(milestoneUpload.status, 201, JSON.stringify(milestoneUpload.data));
+      const milestoneFileId = milestoneUpload.data.id as string;
+      const pdfDownload = await fetch(`${origin}/projects/api/files/${milestoneFileId}`, { headers: { origin, cookie: ownerCookie } });
+      assert.equal(pdfDownload.status, 200);
+      assert.equal(pdfDownload.headers.get('content-type'), 'application/pdf');
+
+      await expectStatus(`/files/${fileId}`, 403, { method: 'DELETE', cookie: viewerCookie });
+      await expectStatus(`/files/${fileId}`, 204, { method: 'DELETE', cookie: editorCookie });
+      const gone = await fetch(`${origin}/projects/api/files/${fileId}`, { headers: { origin, cookie: editorCookie } });
+      assert.equal(gone.status, 404);
     });
 
     await t.test('owner changes and removes project membership', async () => {

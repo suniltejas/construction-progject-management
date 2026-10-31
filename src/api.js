@@ -2,13 +2,14 @@
 const API_ROOT = `${import.meta.env.BASE_URL}api`;
 
 async function request(path, { method = 'GET', body, ...options } = {}) {
+  const rawBody = body instanceof FormData || body instanceof Blob;
   let response;
   try {
     response = await fetch(`${API_ROOT}${path}`, {
       method,
       credentials: 'same-origin',
-      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      headers: body === undefined || rawBody ? undefined : { 'Content-Type': 'application/json' },
+      body: body === undefined || rawBody ? body : JSON.stringify(body),
       ...options,
     });
   } catch (error) {
@@ -31,6 +32,12 @@ async function request(path, { method = 'GET', body, ...options } = {}) {
 
 const segment = (value) => encodeURIComponent(value);
 
+function uploadForm(file) {
+  const form = new FormData();
+  form.append('file', file);
+  return form;
+}
+
 export const api = {
   session: () => request('/session'),
   workspace: () => request('/workspace'),
@@ -43,4 +50,11 @@ export const api = {
   removeMember: (projectId, userId) => request(`/projects/${segment(projectId)}/members/${segment(userId)}`, { method: 'DELETE' }),
   invitation: (token) => request(`/invitations/${segment(token)}`),
   acceptInvitation: (token, password) => request('/invitations/accept', { method: 'POST', body: { token, password } }),
+  addTaskNote: (taskId, body) => request(`/tasks/${segment(taskId)}/notes`, { method: 'POST', body: { body } }),
+  addSubtaskNote: (subtaskId, body) => request(`/subtasks/${segment(subtaskId)}/notes`, { method: 'POST', body: { body } }),
+  deleteNote: (noteId) => request(`/notes/${segment(noteId)}`, { method: 'DELETE' }),
+  addTaskFile: (taskId, file) => request(`/tasks/${segment(taskId)}/files`, { method: 'POST', body: uploadForm(file) }),
+  addMilestoneFile: (milestoneId, file) => request(`/milestones/${segment(milestoneId)}/files`, { method: 'POST', body: uploadForm(file) }),
+  deleteFile: (fileId) => request(`/files/${segment(fileId)}`, { method: 'DELETE' }),
+  fileUrl: (fileId, download = false) => `${API_ROOT}/files/${segment(fileId)}${download ? '?download=1' : ''}`,
 };

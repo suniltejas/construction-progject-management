@@ -19,7 +19,7 @@ import { authClient, hideAuthScreen, showAuthScreen } from './auth-ui.js';
   const formatDate = (value, options = { day: 'numeric', month: 'short', year: 'numeric' }) => value ? new Date(`${value}T12:00:00`).toLocaleDateString(undefined, options) : '—';
   const daysUntil = (value) => Math.round((new Date(`${value}T12:00:00`) - new Date(`${localDate()}T12:00:00`)) / 86400000);
 
-  let data = { projects: [], tasks: [], subtasks: [], milestones: [], memberships: [] };
+  let data = { projects: [], tasks: [], subtasks: [], milestones: [], notes: [], files: [], memberships: [] };
   let currentUser = null;
   const membersByProject = new Map();
   let selectedProjectId = null;
@@ -35,8 +35,8 @@ import { authClient, hideAuthScreen, showAuthScreen } from './auth-ui.js';
     try {
       const response = await api.workspace();
       if (generation !== connectionGeneration || navigator.onLine === false) throw new Error('Connection lost. Reconnect to view your workspace.');
-      if (!['projects', 'tasks', 'subtasks', 'milestones'].every((key) => Array.isArray(response[key]))) throw new Error('Invalid workspace response');
-      data = { ...response, memberships: response.memberships || [] };
+      if (!['projects', 'tasks', 'subtasks', 'milestones', 'notes', 'files'].every((key) => Array.isArray(response[key]))) throw new Error('Invalid workspace response');
+      data = { ...response, notes: response.notes || [], files: response.files || [], memberships: response.memberships || [] };
       membersByProject.clear();
       if (selectedProjectId && ['owner', 'editor'].includes(roleFor(selectedProjectId))) {
         await ensureMembers(selectedProjectId);
@@ -76,7 +76,7 @@ import { authClient, hideAuthScreen, showAuthScreen } from './auth-ui.js';
 
   function clearWorkspaceState() {
     currentUser = null;
-    data = { projects: [], tasks: [], subtasks: [], milestones: [], memberships: [] };
+    data = { projects: [], tasks: [], subtasks: [], milestones: [], notes: [], files: [], memberships: [] };
     membersByProject.clear();
     selectedProjectId = null;
     document.querySelectorAll('dialog').forEach((dialog) => {
@@ -143,6 +143,34 @@ import { authClient, hideAuthScreen, showAuthScreen } from './auth-ui.js';
       : subtask.ownerAssigneeId.startsWith('pending:') ? 'Pending invitation' : 'Project member';
   }
 
+  const notesFor = (parentType, parentId) => data.notes.filter((note) => note.parentType === parentType && note.parentId === parentId);
+  const filesFor = (parentType, parentId) => data.files.filter((file) => file.parentType === parentType && file.parentId === parentId);
+  const formatStamp = (value) => {
+    if (!value) return '';
+    const text = String(value);
+    const date = new Date(text.includes('T') ? text : `${text.replace(' ', 'T')}Z`);
+    return Number.isNaN(date.getTime()) ? text : date.toLocaleString();
+  };
+  const formatBytes = (bytes) => {
+    if (!Number.isFinite(bytes) || bytes < 0) return '';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let value = bytes;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
+    return `${value.toFixed(unit === 0 ? 0 : value < 10 ? 1 : 0)} ${units[unit]}`;
+  };
+  function notesLink(parentType, parentId) {
+    const count = notesFor(parentType, parentId).length;
+    return `<button class="link-button" type="button" data-open-notes="${parentType}:${escapeHtml(parentId)}">Notes${count ? ` (${count})` : ''}</button>`;
+  }
+  function filesLink(parentType, parentId) {
+    const count = filesFor(parentType, parentId).length;
+    return `<button class="link-button" type="button" data-open-files="${parentType}:${escapeHtml(parentId)}">Files${count ? ` (${count})` : ''}</button>`;
+  }
+  function itemLinks(parentType, parentId, { notes = true, files = true } = {}) {
+    return `<span class="item-links">${notes ? notesLink(parentType, parentId) : ''}${files ? filesLink(parentType, parentId) : ''}</span>`;
+  }
+
   function renderNavigation() {
     $('#projectCount').textContent = data.projects.length;
     $('#projectNav').innerHTML = data.projects.map((project) => `<button type="button" class="nav-link ${selectedProjectId === project.id ? 'active' : ''}" data-open-project="${escapeHtml(project.id)}"><span class="project-initial">${escapeHtml(project.name.slice(0, 1).toUpperCase())}</span><span class="truncate">${escapeHtml(project.name)}</span></button>`).join('');
@@ -178,15 +206,15 @@ import { authClient, hideAuthScreen, showAuthScreen } from './auth-ui.js';
     const project = data.projects.find((item) => item.id === milestone.projectId);
     const taskCount = data.tasks.filter((task) => task.milestoneId === milestone.id).length;
     const selected = selectedProjectId === milestone.projectId && taskMilestoneFilter === milestone.id;
-    return `<div class="milestone ${selected ? 'selected' : ''}"><div class="date-tile"><b>${date.toLocaleDateString(undefined, { month: 'short' })}</b><strong>${date.getDate()}</strong></div><div class="milestone-info"><button class="milestone-select" type="button" data-select-milestone="${escapeHtml(milestone.id)}" aria-pressed="${selected}" title="Show tasks for ${escapeHtml(milestone.name)}">${escapeHtml(milestone.name)}</button><span>${showProject ? escapeHtml(project?.name || 'Unknown project') : formatDate(milestone.due)} · ${taskCount} ${taskCount === 1 ? 'task' : 'tasks'}</span></div>${badge(milestone.status)}${!showProject && isOwner(milestone.projectId) ? `<div class="row-actions"><button class="icon-button" type="button" data-edit-milestone="${escapeHtml(milestone.id)}" aria-label="Edit ${escapeHtml(milestone.name)}">⋯</button></div>` : ''}</div>`;
+    return `<div class="milestone ${selected ? 'selected' : ''}"><div class="date-tile"><b>${date.toLocaleDateString(undefined, { month: 'short' })}</b><strong>${date.getDate()}</strong></div><div class="milestone-info"><button class="milestone-select" type="button" data-select-milestone="${escapeHtml(milestone.id)}" aria-pressed="${selected}" title="Show tasks for ${escapeHtml(milestone.name)}">${escapeHtml(milestone.name)}</button><span>${showProject ? escapeHtml(project?.name || 'Unknown project') : formatDate(milestone.due)} · ${taskCount} ${taskCount === 1 ? 'task' : 'tasks'}</span></div>${badge(milestone.status)}${!showProject ? `<div class="row-actions">${filesLink('milestone', milestone.id)}${isOwner(milestone.projectId) ? `<button class="icon-button" type="button" data-edit-milestone="${escapeHtml(milestone.id)}" aria-label="Edit ${escapeHtml(milestone.name)}">⋯</button>` : ''}</div>` : ''}</div>`;
   }
 
   function taskRow(task, milestones) {
     const editable = canEditTasks(task.projectId);
-    const controls = editable ? `<div class="row-actions"><input class="task-check" type="checkbox" data-toggle-task="${escapeHtml(task.id)}" ${task.status === 'Done' ? 'checked' : ''} aria-label="Mark ${escapeHtml(task.name)} done"><button class="icon-button" type="button" data-edit-task="${escapeHtml(task.id)}" aria-label="Edit ${escapeHtml(task.name)}">⋯</button></div>` : '';
+    const controls = `<div class="row-actions">${itemLinks('task', task.id)}${editable ? `<input class="task-check" type="checkbox" data-toggle-task="${escapeHtml(task.id)}" ${task.status === 'Done' ? 'checked' : ''} aria-label="Mark ${escapeHtml(task.name)} done"><button class="icon-button" type="button" data-edit-task="${escapeHtml(task.id)}" aria-label="Edit ${escapeHtml(task.name)}">⋯</button>` : ''}</div>`;
     const children = data.subtasks.filter((subtask) => subtask.taskId === task.id);
     const doneCount = children.filter((subtask) => subtask.status === 'Done').length;
-    const childRows = children.map((subtask) => `<div class="subtask-item" role="listitem"><span class="subtask-state">${editable ? `<input class="task-check" type="checkbox" data-toggle-subtask="${escapeHtml(subtask.id)}" ${subtask.status === 'Done' ? 'checked' : ''} aria-label="Mark ${escapeHtml(subtask.name)} done">` : subtask.status === 'Done' ? '✓' : '○'}</span><span class="subtask-body"><span class="subtask-name ${subtask.status === 'Done' ? 'done' : ''}">${escapeHtml(subtask.name)}</span><small>Owner: ${escapeHtml(subtaskOwnerLabel(subtask))}${subtask.crewLabel ? ` · ${escapeHtml(subtask.crewLabel)}` : ''} · Due ${formatDate(subtask.due || task.due)}</small></span>${badge(subtask.status)}${editable ? `<button class="icon-button" type="button" data-edit-subtask="${escapeHtml(subtask.id)}" aria-label="Edit subtask ${escapeHtml(subtask.name)}">⋯</button>` : ''}</div>`).join('');
+    const childRows = children.map((subtask) => `<div class="subtask-item" role="listitem"><span class="subtask-state">${editable ? `<input class="task-check" type="checkbox" data-toggle-subtask="${escapeHtml(subtask.id)}" ${subtask.status === 'Done' ? 'checked' : ''} aria-label="Mark ${escapeHtml(subtask.name)} done">` : subtask.status === 'Done' ? '✓' : '○'}</span><span class="subtask-body"><span class="subtask-name ${subtask.status === 'Done' ? 'done' : ''}">${escapeHtml(subtask.name)}</span><small>Owner: ${escapeHtml(subtaskOwnerLabel(subtask))}${subtask.crewLabel ? ` · ${escapeHtml(subtask.crewLabel)}` : ''} · Due ${formatDate(subtask.due || task.due)}</small></span>${badge(subtask.status)}${itemLinks('subtask', subtask.id, { files: false })}${editable ? `<button class="icon-button" type="button" data-edit-subtask="${escapeHtml(subtask.id)}" aria-label="Edit subtask ${escapeHtml(subtask.name)}">⋯</button>` : ''}</div>`).join('');
     const childList = children.length ? `<div class="subtask-list"><span class="subtask-summary">Subtasks · ${doneCount}/${children.length} done</span><div role="list">${childRows}</div></div>` : '';
     const addSubtask = editable ? `<button class="text-button add-subtask" type="button" data-add-subtask="${escapeHtml(task.id)}">＋ Add subtask</button>` : '';
     return `<tr><td><strong>${escapeHtml(task.name)}</strong><span class="secondary">Milestone: ${escapeHtml(milestones.find((milestone) => milestone.id === task.milestoneId)?.name || 'Unknown milestone')}</span><span class="secondary priority ${escapeHtml((task.priority || 'Normal').toLowerCase())}">${escapeHtml(task.priority || 'Normal')} priority</span>${childList}${addSubtask}</td><td>${escapeHtml(taskOwnerLabel(task))}</td><td>${formatDate(task.due)}${children.length ? '<span class="secondary">From subtasks</span>' : ''}${task.status !== 'Done' && daysUntil(task.due) < 0 ? '<span class="secondary" style="color:#b54a43">Overdue</span>' : ''}</td><td>${badge(task.status)}</td><td>${controls}</td></tr>`;
@@ -357,6 +385,67 @@ import { authClient, hideAuthScreen, showAuthScreen } from './auth-ui.js';
     form.elements.name.focus();
   }
 
+  function itemForDialog(parentType, parentId) {
+    if (parentType === 'task') return data.tasks.find((item) => item.id === parentId);
+    if (parentType === 'subtask') return data.subtasks.find((item) => item.id === parentId);
+    return data.milestones.find((item) => item.id === parentId);
+  }
+
+  function renderNotes(parentType, parentId) {
+    const item = itemForDialog(parentType, parentId);
+    const canManage = item ? canEditTasks(item.projectId) : false;
+    const list = notesFor(parentType, parentId).slice().sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+    $('#notesList').innerHTML = list.length
+      ? list.map((note) => `<article class="note-item"><p class="note-body">${escapeHtml(note.body)}</p><div class="note-meta"><span>${escapeHtml(note.authorUsername || 'Member')}</span><time datetime="${escapeHtml(note.createdAt)}">${escapeHtml(formatStamp(note.createdAt))}</time>${canManage ? `<button class="icon-button" type="button" data-delete-note="${escapeHtml(note.id)}" aria-label="Delete note">×</button>` : ''}</div></article>`).join('')
+      : '<p class="muted">No notes yet.</p>';
+  }
+
+  function openNotesDialog(parentType, parentId) {
+    const item = itemForDialog(parentType, parentId);
+    if (!item) return;
+    const dialog = $('#notesDialog');
+    dialog.dataset.parentType = parentType;
+    dialog.dataset.parentId = parentId;
+    renderNotes(parentType, parentId);
+    $('#notesDialogTitle').textContent = `Notes · ${item.name}`;
+    $('#noteForm').hidden = !canEditTasks(item.projectId);
+    dialog.showModal();
+  }
+
+  function fileCard(file, canManage) {
+    const kind = file.mimeType === 'application/pdf' ? 'pdf' : file.mimeType.startsWith('image/') ? 'image' : 'other';
+    const previewUrl = api.fileUrl(file.id);
+    const downloadUrl = api.fileUrl(file.id, true);
+    const preview = kind === 'image'
+      ? `<a class="file-preview" href="${downloadUrl}" target="_blank" rel="noopener"><img class="file-thumb" src="${previewUrl}" alt="${escapeHtml(file.originalName)}" loading="lazy"></a>`
+      : kind === 'pdf'
+        ? `<a class="file-preview" href="${downloadUrl}" target="_blank" rel="noopener"><iframe class="file-pdf" src="${previewUrl}" title="${escapeHtml(file.originalName)}"></iframe></a>`
+        : '<span class="file-icon" aria-hidden="true">FILE</span>';
+    return `<article class="file-item">${preview}<div class="file-meta"><a class="file-name" href="${downloadUrl}">${escapeHtml(file.originalName)}</a><small>${escapeHtml(formatBytes(file.sizeBytes))}</small></div>${canManage ? `<button class="icon-button" type="button" data-delete-file="${escapeHtml(file.id)}" aria-label="Delete file">×</button>` : ''}</article>`;
+  }
+
+  function renderFiles(parentType, parentId) {
+    const item = itemForDialog(parentType, parentId);
+    const canManage = item ? canEditTasks(item.projectId) : false;
+    const list = filesFor(parentType, parentId).slice().sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+    $('#filesList').innerHTML = list.length
+      ? list.map((file) => fileCard(file, canManage)).join('')
+      : '<p class="muted">No files yet.</p>';
+  }
+
+  function openFilesDialog(parentType, parentId) {
+    if (parentType !== 'task' && parentType !== 'milestone') return;
+    const item = itemForDialog(parentType, parentId);
+    if (!item) return;
+    const dialog = $('#filesDialog');
+    dialog.dataset.parentType = parentType;
+    dialog.dataset.parentId = parentId;
+    renderFiles(parentType, parentId);
+    $('#filesDialogTitle').textContent = `Files · ${item.name}`;
+    $('#fileForm').hidden = !canEditTasks(item.projectId);
+    dialog.showModal();
+  }
+
   async function upsert(type, values) {
     const id = values.id;
     delete values.id;
@@ -438,6 +527,33 @@ import { authClient, hideAuthScreen, showAuthScreen } from './auth-ui.js';
       return openSubtaskDialog(data.tasks.find((item) => item.id === subtask?.taskId), subtask);
     }
     if (target.dataset.editMilestone) return openDialog('milestone', data.milestones.find((item) => item.id === target.dataset.editMilestone));
+    if (target.dataset.openNotes) {
+      const [parentType, parentId] = target.dataset.openNotes.split(':');
+      return openNotesDialog(parentType, parentId);
+    }
+    if (target.dataset.openFiles) {
+      const [parentType, parentId] = target.dataset.openFiles.split(':');
+      return openFilesDialog(parentType, parentId);
+    }
+    if (target.dataset.deleteNote) {
+      try {
+        await api.deleteNote(target.dataset.deleteNote);
+        await refreshWorkspace();
+        const { parentType, parentId } = $('#notesDialog').dataset;
+        renderNotes(parentType, parentId);
+      } catch (error) { toast(error.message); }
+      return;
+    }
+    if (target.dataset.deleteFile) {
+      if (!confirm('Delete this file?')) return;
+      try {
+        await api.deleteFile(target.dataset.deleteFile);
+        await refreshWorkspace();
+        const { parentType, parentId } = $('#filesDialog').dataset;
+        renderFiles(parentType, parentId);
+      } catch (error) { toast(error.message); }
+      return;
+    }
     if (target.dataset.deleteProject) {
       const project = data.projects.find((item) => item.id === target.dataset.deleteProject);
       if (project && isOwner(project.id) && confirm(`Delete “${project.name}” and all its tasks and milestones? This cannot be undone.`)) {
@@ -559,6 +675,42 @@ import { authClient, hideAuthScreen, showAuthScreen } from './auth-ui.js';
     catch (error) { showFormError(form, error.message); }
   });
 
+  $('#noteForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.target;
+    const { parentType, parentId } = $('#notesDialog').dataset;
+    const body = form.elements.body.value.trim();
+    if (!parentType || !parentId || !body) return;
+    const button = form.querySelector('button[type="submit"]');
+    button.disabled = true;
+    try {
+      if (parentType === 'task') await api.addTaskNote(parentId, body);
+      else await api.addSubtaskNote(parentId, body);
+      form.reset();
+      await refreshWorkspace();
+      renderNotes(parentType, parentId);
+    } catch (error) { showFormError(form, error.message); }
+    finally { button.disabled = false; }
+  });
+
+  $('#fileForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.target;
+    const { parentType, parentId } = $('#filesDialog').dataset;
+    const file = form.elements.file.files && form.elements.file.files[0];
+    if (!parentType || !parentId || !file) return;
+    const button = form.querySelector('button[type="submit"]');
+    button.disabled = true;
+    try {
+      if (parentType === 'task') await api.addTaskFile(parentId, file);
+      else await api.addMilestoneFile(parentId, file);
+      form.reset();
+      await refreshWorkspace();
+      renderFiles(parentType, parentId);
+    } catch (error) { showFormError(form, error.message); }
+    finally { button.disabled = false; }
+  });
+
   $('#inviteForm').addEventListener('submit', async (event) => {
     event.preventDefault();
     const projectId = $('#membersDialog').dataset.projectId;
@@ -616,7 +768,7 @@ import { authClient, hideAuthScreen, showAuthScreen } from './auth-ui.js';
       const { error } = await authClient.signOut();
       if (error) throw new Error(error.message);
       currentUser = null;
-      data = { projects: [], tasks: [], subtasks: [], milestones: [], memberships: [] };
+      data = { projects: [], tasks: [], subtasks: [], milestones: [], notes: [], files: [], memberships: [] };
       membersByProject.clear();
       selectedProjectId = null;
       await showAuthScreen(start);

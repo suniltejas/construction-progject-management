@@ -4,7 +4,7 @@ import { and, eq, gt, inArray, isNull } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { user } from '../auth/auth-schema.js';
 import { getSessionFromRequest } from '../auth/session.js';
-import { invitations, milestones, pendingTaskAssignments, projectMemberships, projects, subtasks, taskAssignments, tasks } from '../db/schema.js';
+import { invitations, milestones, pendingTaskAssignments, projectMemberships, projects, subtasks, taskAssignments, tasks, attachments, notes } from '../db/schema.js';
 import { ApiError, assert } from './errors.js';
 
 export type ProjectRole = 'owner' | 'editor' | 'viewer';
@@ -127,11 +127,37 @@ export function loadWorkspace(userId: string) {
         : childRows));
     }
   }
+  const taskIds = visibleTasks.map((task) => task.id);
+  const subtaskIds = visibleSubtasks.map((subtask) => subtask.id);
+  const milestoneIds = visibleMilestones.map((milestone) => milestone.id);
+
+  const noteColumns = {
+    id: notes.id, projectId: notes.projectId, parentType: notes.parentType, parentId: notes.parentId,
+    body: notes.body, authorUserId: notes.authorUserId, createdAt: notes.createdAt,
+    authorUsername: user.username,
+  };
+  const visibleNotes = [
+    ...(taskIds.length ? db.select(noteColumns).from(notes)
+      .leftJoin(user, eq(notes.authorUserId, user.id))
+      .where(and(eq(notes.parentType, 'task'), inArray(notes.parentId, taskIds))).all() : []),
+    ...(subtaskIds.length ? db.select(noteColumns).from(notes)
+      .leftJoin(user, eq(notes.authorUserId, user.id))
+      .where(and(eq(notes.parentType, 'subtask'), inArray(notes.parentId, subtaskIds))).all() : []),
+  ];
+  const visibleFiles = [
+    ...(taskIds.length ? db.select().from(attachments)
+      .where(and(eq(attachments.parentType, 'task'), inArray(attachments.parentId, taskIds))).all() : []),
+    ...(milestoneIds.length ? db.select().from(attachments)
+      .where(and(eq(attachments.parentType, 'milestone'), inArray(attachments.parentId, milestoneIds))).all() : []),
+  ];
+
   return {
     projects: visibleProjects,
     milestones: visibleMilestones,
     tasks: visibleTasks,
     subtasks: visibleSubtasks,
+    notes: visibleNotes,
+    files: visibleFiles,
     memberships: [...roleByProject].map(([projectId, role]) => ({ projectId, role })),
   };
 }

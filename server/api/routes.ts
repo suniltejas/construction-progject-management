@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { Router } from 'express';
+import { existsSync, unlinkSync } from 'node:fs';
+import { Router, type Request, type RequestHandler, type Response } from 'express';
 import { and, eq, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { latestSubtaskDeadline, latestTaskDeadline, syncMilestoneDeadline, syncTaskDeadline } from '../db/deadlines.js';
-import { milestones, pendingTaskAssignments, projectMemberships, projects, subtasks, taskAssignments, tasks } from '../db/schema.js';
+import { attachments, milestones, notes, pendingTaskAssignments, projectMemberships, projects, subtasks, taskAssignments, tasks } from '../db/schema.js';
+import { classify, storedFilePath, withUploadFile } from '../files/storage.js';
 import { listMembers, loadWorkspace, pendingAssigneeId, requireRole, requireUser, taskForClient, validAssignees } from './access.js';
 import { ApiError, assert } from './errors.js';
-import { memberPatch, milestoneInput, milestonePatch, parse, projectInput, projectPatch, subtaskInput, subtaskPatch, taskInput, taskPatch } from './validation.js';
+import { memberPatch, milestoneInput, milestonePatch, noteBodyInput, parse, projectInput, projectPatch, subtaskInput, subtaskPatch, taskInput, taskPatch } from './validation.js';
 
 export const appRouter = Router();
 
@@ -53,6 +55,61 @@ function fullTask(id: string) {
     ...assigned.map((item) => item.userId),
     ...pending.map((item) => pendingAssigneeId(item.email)),
   ]);
+}
+
+function viewerCanSeeTask(taskId: string, userId: string): boolean {
+  const assigned = db.select({ taskId: taskAssignments.taskId }).from(taskAssignments)
+    .where(and(eq(taskAssignments.taskId, taskId), eq(taskAssignments.userId, userId))).limit(1).get();
+  if (assigned) return true;
+  const ownedChild = db.select({ id: subtasks.id }).from(subtasks)
+    .where(and(eq(subtasks.taskId, taskId), eq(subtasks.ownerAssigneeId, userId))).limit(1).get();
+  return Boolean(ownedChild);
+}
+
+function viewerCanSeeAttachment(projectId: string, userId: string, parentType: 'task' | 'milestone', parentId: string): boolean {
+  if (parentType === 'task') return viewerCanSeeTask(parentId, userId);
+  const milestoneTasks = db.select({ id: tasks.id }).from(tasks)
+    .where(and(eq(tasks.projectId, projectId), eq(tasks.milestoneId, parentId))).all();
+  return milestoneTasks.some((task) => viewerCanSeeTask(task.id, userId));
+}
+
+const taskFileGuard: RequestHandler = async (req, res, next) => {
+  try {
+    const user = await requireUser(req);
+    const task = existingTask(routeId(req.params.id));
+    requireRole(task.projectId, user.id, ['owner', 'editor']);
+    res.locals.fileUser = user;
+    res.locals.fileParent = task;
+    next();
+  } catch (error) { next(error); }
+};
+
+const milestoneFileGuard: RequestHandler = async (req, res, next) => {
+  try {
+    const user = await requireUser(req);
+    const milestone = existingMilestone(routeId(req.params.id));
+    requireRole(milestone.projectId, user.id, ['owner', 'editor']);
+    res.locals.fileUser = user;
+    res.locals.fileParent = milestone;
+    next();
+  } catch (error) { next(error); }
+};
+
+function saveAttachment(req: Request, res: Response, parentType: 'task' | 'milestone') {
+  const file = req.file;
+  const parent = res.locals.fileParent as { id: string; projectId: string };
+  const user = res.locals.fileUser as { id: string };
+  if (!file) throw new ApiError(400, 'No file uploaded');
+  try {
+    return db.insert(attachments).values({
+      id: file.filename, projectId: parent.projectId, parentType, parentId: parent.id,
+      originalName: file.originalname, mimeType: file.mimetype, sizeBytes: file.size,
+      uploadedUserId: user.id,
+    }).returning().get();
+  } catch (error) {
+    try { unlinkSync(storedFilePath(file.filename)); } catch { /* ignore */ }
+    throw error;
+  }
 }
 
 appRouter.get('/session', async (req, res) => {
@@ -234,6 +291,81 @@ appRouter.delete('/subtasks/:id', async (req, res) => {
     tx.delete(subtasks).where(eq(subtasks.id, id)).run();
     syncTaskDeadline(subtask.taskId);
   });
+  res.status(204).end();
+});
+
+appRouter.post('/tasks/:id/notes', async (req, res) => {
+  const user = await requireUser(req);
+  const task = existingTask(routeId(req.params.id));
+  requireRole(task.projectId, user.id, ['owner', 'editor']);
+  const { body } = parse(noteBodyInput, req.body);
+  const note = db.insert(notes).values({
+    id: randomUUID(), projectId: task.projectId, parentType: 'task', parentId: task.id,
+    body, authorUserId: user.id,
+  }).returning().get();
+  res.status(201).json({ ...note, authorUsername: user.username });
+});
+
+appRouter.post('/subtasks/:id/notes', async (req, res) => {
+  const user = await requireUser(req);
+  const subtask = existingSubtask(routeId(req.params.id));
+  requireRole(subtask.projectId, user.id, ['owner', 'editor']);
+  const { body } = parse(noteBodyInput, req.body);
+  const note = db.insert(notes).values({
+    id: randomUUID(), projectId: subtask.projectId, parentType: 'subtask', parentId: subtask.id,
+    body, authorUserId: user.id,
+  }).returning().get();
+  res.status(201).json({ ...note, authorUsername: user.username });
+});
+
+appRouter.delete('/notes/:id', async (req, res) => {
+  const user = await requireUser(req);
+  const id = routeId(req.params.id);
+  const note = db.select().from(notes).where(eq(notes.id, id)).limit(1).get();
+  assert(note, 404, 'Note not found');
+  requireRole(note.projectId, user.id, ['owner', 'editor']);
+  db.delete(notes).where(eq(notes.id, id)).run();
+  res.status(204).end();
+});
+
+appRouter.post('/tasks/:id/files', taskFileGuard, withUploadFile(), (req, res) => {
+  const attachment = saveAttachment(req, res, 'task');
+  res.status(201).json(attachment);
+});
+
+appRouter.post('/milestones/:id/files', milestoneFileGuard, withUploadFile(), (req, res) => {
+  const attachment = saveAttachment(req, res, 'milestone');
+  res.status(201).json(attachment);
+});
+
+appRouter.get('/files/:id', async (req, res) => {
+  const user = await requireUser(req);
+  const id = routeId(req.params.id);
+  const attachment = db.select().from(attachments).where(eq(attachments.id, id)).limit(1).get();
+  assert(attachment, 404, 'File not found');
+  const access = requireRole(attachment.projectId, user.id, ['owner', 'editor', 'viewer']);
+  if (access.role === 'viewer'
+    && !viewerCanSeeAttachment(attachment.projectId, user.id, attachment.parentType, attachment.parentId)) {
+    throw new ApiError(404, 'File not found');
+  }
+  const filePath = storedFilePath(attachment.id);
+  if (!existsSync(filePath)) throw new ApiError(404, 'File is missing from storage');
+  const previewable = classify(attachment.mimeType) !== 'other';
+  const download = !previewable || req.query.download === '1' || req.query.download === 'true';
+  const name = attachment.originalName.replace(/["\\\r\n]/g, '_');
+  res.setHeader('Content-Type', attachment.mimeType);
+  res.setHeader('Content-Disposition', `${download ? 'attachment' : 'inline'}; filename="${name}"; filename*=UTF-8''${encodeURIComponent(attachment.originalName)}`);
+  res.sendFile(filePath);
+});
+
+appRouter.delete('/files/:id', async (req, res) => {
+  const user = await requireUser(req);
+  const id = routeId(req.params.id);
+  const attachment = db.select().from(attachments).where(eq(attachments.id, id)).limit(1).get();
+  assert(attachment, 404, 'File not found');
+  requireRole(attachment.projectId, user.id, ['owner', 'editor']);
+  db.delete(attachments).where(eq(attachments.id, id)).run();
+  try { unlinkSync(storedFilePath(attachment.id)); } catch { /* already gone */ }
   res.status(204).end();
 });
 

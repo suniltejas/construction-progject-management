@@ -170,3 +170,39 @@ export const pendingTaskAssignments = sqliteTable('pending_task_assignments', {
   }).onDelete('cascade'),
   check('pending_task_assignments_normalized_email_check', sql`${table.email} = lower(trim(${table.email}))`),
 ]);
+
+// Timestamped notes attached to a task or subtask. parentType scopes parentId
+// to the right table; projectId enables role checks and cascade cleanup.
+export const notes = sqliteTable('notes', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  parentType: text('parent_type', { enum: ['task', 'subtask'] }).notNull(),
+  parentId: text('parent_id').notNull(),
+  body: text('body').notNull(),
+  authorUserId: text('author_user_id').references(() => user.id, { onDelete: 'set null' }),
+  createdAt: text('created_at').notNull().default(sql`(CURRENT_TIMESTAMP)`),
+}, (table) => [
+  index('notes_parent_idx').on(table.parentType, table.parentId),
+  index('notes_project_idx').on(table.projectId),
+  check('notes_parent_type_check', sql`${table.parentType} in ('task', 'subtask')`),
+  check('notes_body_check', sql`length(trim(${table.body})) > 0`),
+]);
+
+// Files stored on disk; this table indexes them. `id` is also the on-disk
+// filename (a UUID), never the user's original name.
+export const attachments = sqliteTable('attachments', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  parentType: text('parent_type', { enum: ['task', 'milestone'] }).notNull(),
+  parentId: text('parent_id').notNull(),
+  originalName: text('original_name').notNull(),
+  mimeType: text('mime_type').notNull(),
+  sizeBytes: integer('size_bytes').notNull(),
+  uploadedUserId: text('uploaded_user_id').references(() => user.id, { onDelete: 'set null' }),
+  createdAt: text('created_at').notNull().default(sql`(CURRENT_TIMESTAMP)`),
+}, (table) => [
+  index('attachments_parent_idx').on(table.parentType, table.parentId),
+  index('attachments_project_idx').on(table.projectId),
+  check('attachments_parent_type_check', sql`${table.parentType} in ('task', 'milestone')`),
+  check('attachments_size_check', sql`${table.sizeBytes} >= 0`),
+]);

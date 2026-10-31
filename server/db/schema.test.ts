@@ -84,3 +84,26 @@ test('project membership and invitation constraints reject invalid role or dupli
     sqlite.close();
   }
 });
+
+test('notes and attachments are constrained and cascade with the project', () => {
+  const sqlite = freshDatabase();
+  try {
+    sqlite.prepare(`INSERT INTO notes (id, project_id, parent_type, parent_id, body)
+      VALUES ('n1', 'p1', 'task', 't1', 'First note')`).run();
+    assert.throws(() => sqlite.prepare(`INSERT INTO notes (id, project_id, parent_type, parent_id, body)
+      VALUES ('n2', 'p1', 'task', 't1', '   ')`).run(), /CHECK constraint failed/);
+    assert.throws(() => sqlite.prepare(`INSERT INTO notes (id, project_id, parent_type, parent_id, body)
+      VALUES ('n3', 'p1', 'milestone', 'm1', 'Wrong type')`).run(), /CHECK constraint failed/);
+    sqlite.prepare(`INSERT INTO attachments (id, project_id, parent_type, parent_id, original_name, mime_type, size_bytes)
+      VALUES ('a1', 'p1', 'milestone', 'm1', 'drawing.pdf', 'application/pdf', 10)`).run();
+    assert.throws(() => sqlite.prepare(`INSERT INTO attachments (id, project_id, parent_type, parent_id, original_name, mime_type, size_bytes)
+      VALUES ('a2', 'p1', 'task', 't1', 'f.png', 'image/png', -1)`).run(), /CHECK constraint failed/);
+    assert.throws(() => sqlite.prepare(`INSERT INTO attachments (id, project_id, parent_type, parent_id, original_name, mime_type, size_bytes)
+      VALUES ('a3', 'p1', 'subtask', 's1', 'f.png', 'image/png', 1)`).run(), /CHECK constraint failed/);
+    sqlite.prepare(`DELETE FROM projects WHERE id = 'p1'`).run();
+    assert.equal((sqlite.prepare(`SELECT count(*) AS count FROM notes WHERE id = 'n1'`).get() as { count: number }).count, 0);
+    assert.equal((sqlite.prepare(`SELECT count(*) AS count FROM attachments WHERE id = 'a1'`).get() as { count: number }).count, 0);
+  } finally {
+    sqlite.close();
+  }
+});
