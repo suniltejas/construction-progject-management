@@ -280,6 +280,52 @@ snapshot, then run `pnpm run db:migrate` against a copy of the database before
 production. `pnpm run db:check` checks migration history. Avoid `db:push` in
 production.
 
+## Upgrading an existing database
+
+A database created by v1 (migrations `0000`–`0003`) upgrades without data loss.
+Every later migration only adds; nothing existing is renamed, removed, or
+rewritten:
+
+| Migration | Change | Effect on existing rows |
+|---|---|---|
+| `0004` | `subtasks.crew_label` column, default `''` | Old subtasks get a blank crew label |
+| `0005` | New `notes` and `attachments` tables | Start empty |
+| `0006` | `tasks.completed_at` column, nullable | Old tasks have no finish date |
+| `0007` | New `task_dependencies` table | Starts empty |
+
+Tasks that were already Done before `0006` show "Done" without a date and sort
+last under "Recently finished". Only tasks finished after the upgrade are
+stamped.
+
+**Check first:** migrations only apply cleanly if the old database was created
+with `pnpm run db:migrate` (it has a `__drizzle_migrations` table). A database
+created with `db:push` fails with "table already exists" and needs its
+migration history recorded by hand before upgrading.
+
+**Steps**
+
+1. **Back up.** Stop the old app, then copy the `.sqlite` file together with its
+   `-wal` and `-shm` files (or use the `sqlite3` CLI `.backup` command while it
+   runs). Also back up `FILES_DIR` if it exists.
+2. **Test on a copy.** Migrate a copy, start the app against it, sign in, and
+   check projects and tasks look right:
+   ```powershell
+   $env:DATABASE_PATH = "C:\path\to\copy\fieldline.sqlite"; pnpm run db:migrate
+   ```
+3. **Upgrade for real.** On the machine with the live data:
+   ```sh
+   pnpm install --frozen-lockfile
+   pnpm run build
+   pnpm run db:migrate
+   pnpm run start
+   ```
+4. **Optional:** give old Done tasks an approximate finish date (their last edit
+   time) so "Recently finished" includes them:
+   ```sql
+   UPDATE tasks SET completed_at = updated_at
+   WHERE status = 'Done' AND completed_at IS NULL;
+   ```
+
 ## Roadmap & ideas
 
 A scratch list of ideas lives in [`tasks.md`](tasks.md). Directions that fit the
