@@ -63,6 +63,7 @@ export const tasks = sqliteTable('tasks', {
   due: text('due').notNull(),
   plannedDue: text('planned_due'),
   status: text('status').notNull().default('Not started'),
+  completedAt: text('completed_at'),
   priority: text('priority').notNull().default('Normal'),
   version: integer('version').notNull().default(1),
   createdAt: text('created_at').notNull().default(sql`(CURRENT_TIMESTAMP)`),
@@ -205,4 +206,28 @@ export const attachments = sqliteTable('attachments', {
   index('attachments_project_idx').on(table.projectId),
   check('attachments_parent_type_check', sql`${table.parentType} in ('task', 'milestone')`),
   check('attachments_size_check', sql`${table.sizeBytes} >= 0`),
+]);
+
+// Predecessor edges: `predecessor_task_id` must be finished before `task_id`.
+// Both tasks are forced into the same project by the composite foreign keys.
+export const taskDependencies = sqliteTable('task_dependencies', {
+  projectId: text('project_id').notNull(),
+  taskId: text('task_id').notNull(),
+  predecessorTaskId: text('predecessor_task_id').notNull(),
+  createdAt: text('created_at').notNull().default(sql`(CURRENT_TIMESTAMP)`),
+}, (table) => [
+  primaryKey({ columns: [table.taskId, table.predecessorTaskId] }),
+  index('task_dependencies_task_idx').on(table.projectId, table.taskId),
+  index('task_dependencies_predecessor_idx').on(table.projectId, table.predecessorTaskId),
+  foreignKey({
+    columns: [table.projectId, table.taskId],
+    foreignColumns: [tasks.projectId, tasks.id],
+    name: 'task_dependencies_task_fk',
+  }).onDelete('cascade'),
+  foreignKey({
+    columns: [table.projectId, table.predecessorTaskId],
+    foreignColumns: [tasks.projectId, tasks.id],
+    name: 'task_dependencies_predecessor_fk',
+  }).onDelete('cascade'),
+  check('task_dependencies_not_self_check', sql`${table.taskId} <> ${table.predecessorTaskId}`),
 ]);

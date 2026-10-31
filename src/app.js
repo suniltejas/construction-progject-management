@@ -18,6 +18,17 @@ import { authClient, hideAuthScreen, showAuthScreen } from './auth-ui.js';
   };
   const formatDate = (value, options = { day: 'numeric', month: 'short', year: 'numeric' }) => value ? new Date(`${value}T12:00:00`).toLocaleDateString(undefined, options) : '—';
   const daysUntil = (value) => Math.round((new Date(`${value}T12:00:00`) - new Date(`${localDate()}T12:00:00`)) / 86400000);
+  const isOverdue = (value) => Boolean(value) && daysUntil(value) < 0;
+  const formatDue = (value) => {
+    if (!value) return '—';
+    const days = daysUntil(value);
+    const date = formatDate(value);
+    if (days < 0) return `Overdue ${Math.abs(days)}d · ${date}`;
+    if (days === 0) return `Today · ${date}`;
+    if (days === 1) return `Tomorrow · ${date}`;
+    if (days <= 7) return `In ${days} days · ${date}`;
+    return date;
+  };
 
   let data = { projects: [], tasks: [], subtasks: [], milestones: [], notes: [], files: [], memberships: [] };
   let currentUser = null;
@@ -27,6 +38,7 @@ import { authClient, hideAuthScreen, showAuthScreen } from './auth-ui.js';
   let taskOwnerFilter = 'all';
   let taskMilestoneFilter = 'all';
   let taskSearch = '';
+  let taskSort = 'due-asc';
   let toastTimer;
   let connectionGeneration = 0;
 
@@ -170,6 +182,27 @@ import { authClient, hideAuthScreen, showAuthScreen } from './auth-ui.js';
   function itemLinks(parentType, parentId, { notes = true, files = true } = {}) {
     return `<span class="item-links">${notes ? notesLink(parentType, parentId) : ''}${files ? filesLink(parentType, parentId) : ''}</span>`;
   }
+  const priorityRank = { Critical: 3, High: 2, Normal: 1 };
+  function sortTasks(list) {
+    const byDueAsc = (a, b) => a.due.localeCompare(b.due);
+    switch (taskSort) {
+      case 'due-desc':
+        return [...list].sort((a, b) => b.due.localeCompare(a.due));
+      case 'completed-desc':
+        return [...list].sort((a, b) => {
+          const at = a.completedAt || '';
+          const bt = b.completedAt || '';
+          if (at && bt) return bt.localeCompare(at);
+          if (at) return -1;
+          if (bt) return 1;
+          return byDueAsc(a, b);
+        });
+      case 'priority':
+        return [...list].sort((a, b) => (priorityRank[b.priority] || 0) - (priorityRank[a.priority] || 0) || byDueAsc(a, b));
+      default:
+        return [...list].sort(byDueAsc);
+    }
+  }
 
   function renderNavigation() {
     $('#projectCount').textContent = data.projects.length;
@@ -212,12 +245,19 @@ import { authClient, hideAuthScreen, showAuthScreen } from './auth-ui.js';
   function taskRow(task, milestones) {
     const editable = canEditTasks(task.projectId);
     const controls = `<div class="row-actions">${itemLinks('task', task.id)}${editable ? `<input class="task-check" type="checkbox" data-toggle-task="${escapeHtml(task.id)}" ${task.status === 'Done' ? 'checked' : ''} aria-label="Mark ${escapeHtml(task.name)} done"><button class="icon-button" type="button" data-edit-task="${escapeHtml(task.id)}" aria-label="Edit ${escapeHtml(task.name)}">⋯</button>` : ''}</div>`;
+    const preds = (task.predecessorTaskIds || [])
+      .map((predId) => data.tasks.find((candidate) => candidate.id === predId))
+      .filter(Boolean);
+    const blocked = preds.some((pred) => pred.status !== 'Done');
+    const depLine = preds.length
+      ? `<span class="task-deps"><span class="dep-label">Blocked by</span>${preds.map((pred) => `<span class="dep-chip ${pred.status === 'Done' ? 'done' : 'pending'}" title="${escapeHtml(`${pred.name} · ${pred.status}`)}">${pred.status === 'Done' ? '✓ ' : ''}${escapeHtml(pred.name)}</span>`).join('')}</span>`
+      : '';
     const children = data.subtasks.filter((subtask) => subtask.taskId === task.id);
     const doneCount = children.filter((subtask) => subtask.status === 'Done').length;
-    const childRows = children.map((subtask) => `<div class="subtask-item" role="listitem"><span class="subtask-state">${editable ? `<input class="task-check" type="checkbox" data-toggle-subtask="${escapeHtml(subtask.id)}" ${subtask.status === 'Done' ? 'checked' : ''} aria-label="Mark ${escapeHtml(subtask.name)} done">` : subtask.status === 'Done' ? '✓' : '○'}</span><span class="subtask-body"><span class="subtask-name ${subtask.status === 'Done' ? 'done' : ''}">${escapeHtml(subtask.name)}</span><small>Owner: ${escapeHtml(subtaskOwnerLabel(subtask))}${subtask.crewLabel ? ` · ${escapeHtml(subtask.crewLabel)}` : ''} · Due ${formatDate(subtask.due || task.due)}</small></span>${badge(subtask.status)}${itemLinks('subtask', subtask.id, { files: false })}${editable ? `<button class="icon-button" type="button" data-edit-subtask="${escapeHtml(subtask.id)}" aria-label="Edit subtask ${escapeHtml(subtask.name)}">⋯</button>` : ''}</div>`).join('');
+    const childRows = children.map((subtask) => `<div class="subtask-item" role="listitem"><span class="subtask-state">${editable ? `<input class="task-check" type="checkbox" data-toggle-subtask="${escapeHtml(subtask.id)}" ${subtask.status === 'Done' ? 'checked' : ''} aria-label="Mark ${escapeHtml(subtask.name)} done">` : subtask.status === 'Done' ? '✓' : '○'}</span><span class="subtask-body"><span class="subtask-name ${subtask.status === 'Done' ? 'done' : ''}">${escapeHtml(subtask.name)}</span><small>Owner: ${escapeHtml(subtaskOwnerLabel(subtask))}${subtask.crewLabel ? ` · ${escapeHtml(subtask.crewLabel)}` : ''} · ${escapeHtml(formatDue(subtask.due || task.due))}</small></span>${badge(subtask.status)}${itemLinks('subtask', subtask.id, { files: false })}${editable ? `<button class="icon-button" type="button" data-edit-subtask="${escapeHtml(subtask.id)}" aria-label="Edit subtask ${escapeHtml(subtask.name)}">⋯</button>` : ''}</div>`).join('');
     const childList = children.length ? `<div class="subtask-list"><span class="subtask-summary">Subtasks · ${doneCount}/${children.length} done</span><div role="list">${childRows}</div></div>` : '';
     const addSubtask = editable ? `<button class="text-button add-subtask" type="button" data-add-subtask="${escapeHtml(task.id)}">＋ Add subtask</button>` : '';
-    return `<tr><td><strong>${escapeHtml(task.name)}</strong><span class="secondary">Milestone: ${escapeHtml(milestones.find((milestone) => milestone.id === task.milestoneId)?.name || 'Unknown milestone')}</span><span class="secondary priority ${escapeHtml((task.priority || 'Normal').toLowerCase())}">${escapeHtml(task.priority || 'Normal')} priority</span>${childList}${addSubtask}</td><td>${escapeHtml(taskOwnerLabel(task))}</td><td>${formatDate(task.due)}${children.length ? '<span class="secondary">From subtasks</span>' : ''}${task.status !== 'Done' && daysUntil(task.due) < 0 ? '<span class="secondary" style="color:#b54a43">Overdue</span>' : ''}</td><td>${badge(task.status)}</td><td>${controls}</td></tr>`;
+    return `<tr><td><strong>${escapeHtml(task.name)}</strong>${blocked ? ' <span class="badge red">Blocked</span>' : ''}<span class="secondary">Milestone: ${escapeHtml(milestones.find((milestone) => milestone.id === task.milestoneId)?.name || 'Unknown milestone')}</span><span class="secondary priority ${escapeHtml((task.priority || 'Normal').toLowerCase())}">${escapeHtml(task.priority || 'Normal')} priority</span>${depLine}${childList}${addSubtask}</td><td>${escapeHtml(taskOwnerLabel(task))}</td><td><span class="${isOverdue(task.due) && task.status !== 'Done' ? 'due-overdue' : ''}">${escapeHtml(formatDue(task.due))}</span>${children.length ? '<span class="secondary">From subtasks</span>' : ''}${task.status === 'Done' && task.completedAt ? `<span class="secondary">Finished ${escapeHtml(formatDate(String(task.completedAt).slice(0, 10)))}</span>` : ''}</td><td>${badge(task.status)}</td><td>${controls}</td></tr>`;
   }
 
   function renderProject(project) {
@@ -260,14 +300,16 @@ import { authClient, hideAuthScreen, showAuthScreen } from './auth-ui.js';
         && (task.name.toLowerCase().includes(taskSearch.toLowerCase())
           || data.subtasks.some((subtask) => subtask.taskId === task.id
             && subtask.name.toLowerCase().includes(taskSearch.toLowerCase())));
-    }).sort((a, b) => a.due.localeCompare(b.due));
+    });
+    const ordered = sortTasks(filtered);
     const filtersActive = taskMilestoneFilter !== 'all' || taskFilter !== 'All tasks' || taskOwnerFilter !== 'all' || taskSearch;
     const emptyTaskTitle = !tasks.length ? roleFor(project.id) === 'viewer' ? 'No tasks assigned to you yet' : 'No tasks yet' : selectedMilestone && !tasks.some((task) => task.milestoneId === selectedMilestone.id) ? 'No tasks under this milestone' : 'No tasks match this view';
     const emptyTaskDetail = !tasks.length ? roleFor(project.id) === 'viewer' ? 'Your project editor can assign a task to you.' : milestones.length ? 'Add the first task for this project.' : 'Create a milestone before adding tasks.' : selectedMilestone && !tasks.some((task) => task.milestoneId === selectedMilestone.id) ? canEditTasks(project.id) ? 'Add a task to this milestone or show all tasks.' : 'Show all tasks or ask an editor for an assignment.' : 'Change the search or filters.';
     const milestoneContextHtml = selectedMilestone ? `<div class="milestone-context">Showing tasks for <strong>${escapeHtml(selectedMilestone.name)}</strong><button type="button" data-clear-milestone="true">Show all tasks</button></div>` : '';
+    const sortHtml = `<select id="taskSort" aria-label="Sort tasks">${[['due-asc', 'Due soonest'], ['due-desc', 'Due latest'], ['completed-desc', 'Recently finished'], ['priority', 'Priority']].map(([value, label]) => `<option value="${value}" ${taskSort === value ? 'selected' : ''}>${label}</option>`).join('')}</select>`;
     $('#view').innerHTML = `<div class="content"><div class="page-title-row"><div><p class="eyebrow">Project workspace</p><h1>${escapeHtml(project.name)}</h1><p class="subhead">${roleFor(project.id) === 'viewer' ? 'Assigned tasks only' : `${escapeHtml(project.location || 'Location not set')} &nbsp;•&nbsp; ${badge(project.stage)}`} <span class="role-label">${escapeHtml(roleFor(project.id) || '')}</span></p></div><div class="title-actions">${isOwner(project.id) ? `<button class="button subtle" type="button" data-manage-members="${escapeHtml(project.id)}">People & access</button><button class="button subtle" type="button" data-edit-project="${escapeHtml(project.id)}">Edit project</button><button class="button danger" type="button" data-delete-project="${escapeHtml(project.id)}">Delete</button>` : ''}</div></div>
       <section class="project-hero ${roleFor(project.id) === 'viewer' ? 'viewer-project-hero' : ''}">${roleFor(project.id) === 'viewer' ? '' : `<div class="hero-meta"><div><p>Project lead</p><strong>${escapeHtml(project.lead || 'Unassigned')}</strong></div><div><p>Start date</p><strong>${formatDate(project.start)}</strong></div><div><p>Target finish</p><strong>${formatDate(project.end)}</strong></div></div>`}<div class="hero-progress"><p>${roleFor(project.id) === 'viewer' ? 'My task progress' : 'Task progress'}</p><strong>${progress(project.id)}%</strong>${progressBar(progress(project.id)).split('<div class="progress-label">')[0]}</div></section>
-      <div class="two-columns"><section id="tasksSection"><div class="section-heading"><h2>Tasks <span class="muted">(${filtersActive ? filtered.length + " of " + tasks.length : tasks.length})</span></h2>${canEditTasks(project.id) ? '<button class="button primary" type="button" data-add="task">＋ Add task</button>' : ''}</div><div class="panel"><div class="panel-footer filter-row"><input class="search-input" id="taskSearch" type="search" placeholder="Search tasks" aria-label="Search tasks" value="${escapeHtml(taskSearch)}">${milestoneFilterHtml}<select id="taskFilter" aria-label="Filter tasks">${['All tasks', 'Not started', 'In progress', 'Blocked', 'Done'].map((option) => `<option ${option === taskFilter ? 'selected' : ''}>${option}</option>`).join('')}</select>${ownerFilterHtml}</div>${milestoneContextHtml}<div class="table-wrap">${filtered.length ? `<table><thead><tr><th>Task</th><th>Owner / assignees</th><th>Due</th><th>Status</th><th></th></tr></thead><tbody>${filtered.map((task) => taskRow(task, milestones)).join('')}</tbody></table>` : `<div class="empty"><strong>${emptyTaskTitle}</strong>${emptyTaskDetail}</div>`}</div></div></section>
+      <div class="two-columns"><section id="tasksSection"><div class="section-heading"><h2>Tasks <span class="muted">(${filtersActive ? filtered.length + " of " + tasks.length : tasks.length})</span></h2>${canEditTasks(project.id) ? '<button class="button primary" type="button" data-add="task">＋ Add task</button>' : ''}</div><div class="panel"><div class="panel-footer filter-row"><input class="search-input" id="taskSearch" type="search" placeholder="Search tasks" aria-label="Search tasks" value="${escapeHtml(taskSearch)}">${milestoneFilterHtml}<select id="taskFilter" aria-label="Filter tasks">${['All tasks', 'Not started', 'In progress', 'Blocked', 'Done'].map((option) => `<option ${option === taskFilter ? 'selected' : ''}>${option}</option>`).join('')}</select>${ownerFilterHtml}${sortHtml}</div>${milestoneContextHtml}<div class="table-wrap">${filtered.length ? `<table><thead><tr><th>Task</th><th>Owner / assignees</th><th>Due</th><th>Status</th><th></th></tr></thead><tbody>${ordered.map((task) => taskRow(task, milestones)).join('')}</tbody></table>` : `<div class="empty"><strong>${emptyTaskTitle}</strong>${emptyTaskDetail}</div>`}</div></div></section>
       <section><div class="section-heading"><h2>Milestones <span class="muted">(${milestones.length})</span></h2>${isOwner(project.id) ? '<button class="button" type="button" data-add="milestone">＋ Add</button>' : ''}</div><div class="panel">${milestones.length ? `<div class="mini-list">${milestones.map((milestone) => milestoneRow(milestone)).join('')}</div>` : `<div class="empty"><strong>No milestones yet</strong>${isOwner(project.id) ? 'Add a target date to map the schedule.' : ''}</div>`}</div></section></div></div>`;
   }
 
@@ -330,8 +372,15 @@ import { authClient, hideAuthScreen, showAuthScreen } from './auth-ui.js';
           }).join('')
           : '<p class="muted">Invite someone to assign them tasks.</p>';
       } catch (error) { toast(error.message); return; }
+      const otherTasks = projectTasks(form.elements.projectId.value)
+        .filter((candidate) => candidate.id !== item?.id)
+        .sort((a, b) => a.due.localeCompare(b.due) || a.name.localeCompare(b.name));
+      const predecessorSet = new Set(item?.predecessorTaskIds || []);
+      $('#predecessorOptions').innerHTML = otherTasks.length
+        ? otherTasks.map((candidate) => `<label class="assignee-option"><input type="checkbox" name="predecessorTaskIds" value="${escapeHtml(candidate.id)}" ${predecessorSet.has(candidate.id) ? 'checked' : ''}><span>${escapeHtml(candidate.name)}<small>${escapeHtml(candidate.status)} · ${escapeHtml(formatDue(candidate.due))}</small></span></label>`).join('')
+        : '<p class="muted">No other tasks in this project yet.</p>';
     }
-    if (item) Object.keys(item).forEach((key) => { if (key !== 'assigneeUserIds' && form.elements[key]) form.elements[key].value = item[key]; });
+    if (item) Object.keys(item).forEach((key) => { if (key !== 'assigneeUserIds' && key !== 'predecessorTaskIds' && form.elements[key]) form.elements[key].value = item[key]; });
     else if (type === 'project') { form.elements.start.value = localDate(); form.elements.end.value = localDate(90); }
     else form.elements.due.value = localDate(7);
     if (type === 'task' && !item && taskMilestoneFilter !== 'all') form.elements.milestoneId.value = taskMilestoneFilter;
@@ -573,6 +622,7 @@ import { authClient, hideAuthScreen, showAuthScreen } from './auth-ui.js';
     if (event.target.id === 'taskFilter') { taskFilter = event.target.value; render(); }
     if (event.target.id === 'taskOwnerFilter') { taskOwnerFilter = event.target.value; render(); }
     if (event.target.id === 'taskMilestoneFilter') { taskMilestoneFilter = event.target.value; resetTaskRefinements(); render(); }
+    if (event.target.id === 'taskSort') { taskSort = event.target.value; render(); }
     if (event.target.dataset.toggleTask) {
       const task = data.tasks.find((item) => item.id === event.target.dataset.toggleTask);
       if (task && canEditTasks(task.projectId)) {
@@ -613,7 +663,10 @@ import { authClient, hideAuthScreen, showAuthScreen } from './auth-ui.js';
     $(`#${type}Form`).addEventListener('submit', async (event) => {
       event.preventDefault();
       const values = Object.fromEntries(new FormData(event.target));
-      if (type === 'task') values.assigneeUserIds = new FormData(event.target).getAll('assigneeUserIds');
+      if (type === 'task') {
+        values.assigneeUserIds = new FormData(event.target).getAll('assigneeUserIds');
+        values.predecessorTaskIds = new FormData(event.target).getAll('predecessorTaskIds');
+      }
       if (type === 'project' && values.end < values.start) { showFormError(event.target, 'Target finish must be after start date'); return; }
       if (type === 'task' && !data.milestones.some((milestone) => milestone.id === values.milestoneId && milestone.projectId === values.projectId)) {
         showFormError(event.target, 'Select a milestone from this project');

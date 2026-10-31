@@ -46,6 +46,7 @@ export const taskInput = z.strictObject({
   status: z.enum(['Not started', 'In progress', 'Blocked', 'Done']).default('Not started'),
   priority: z.enum(['Normal', 'High', 'Critical']).default('Normal'),
   assigneeUserIds: z.array(required(100)).max(100).default([]),
+  predecessorTaskIds: z.array(required(100)).max(100).default([]),
 });
 export const taskPatch = z.strictObject({
   projectId: required(100).optional(),
@@ -56,6 +57,7 @@ export const taskPatch = z.strictObject({
   status: z.enum(['Not started', 'In progress', 'Blocked', 'Done']).optional(),
   priority: z.enum(['Normal', 'High', 'Critical']).optional(),
   assigneeUserIds: z.array(required(100)).max(100).optional(),
+  predecessorTaskIds: z.array(required(100)).max(100).optional(),
   version: z.number().int().positive(),
 });
 

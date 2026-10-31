@@ -4,7 +4,7 @@ import { and, eq, gt, inArray, isNull } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { user } from '../auth/auth-schema.js';
 import { getSessionFromRequest } from '../auth/session.js';
-import { invitations, milestones, pendingTaskAssignments, projectMemberships, projects, subtasks, taskAssignments, tasks, attachments, notes } from '../db/schema.js';
+import { invitations, milestones, pendingTaskAssignments, projectMemberships, projects, subtasks, taskAssignments, tasks, attachments, notes, taskDependencies } from '../db/schema.js';
 import { ApiError, assert } from './errors.js';
 
 export type ProjectRole = 'owner' | 'editor' | 'viewer';
@@ -57,9 +57,9 @@ export function validAssignees(projectId: string, assigneeUserIds: string[]) {
   return { userIds, pendingEmails };
 }
 
-export function taskForClient(task: typeof tasks.$inferSelect, assigneeUserIds: string[]) {
+export function taskForClient(task: typeof tasks.$inferSelect, assigneeUserIds: string[], predecessorTaskIds: string[] = []) {
   const { ownerLabel, ...rest } = task;
-  return { ...rest, owner: ownerLabel, assigneeUserIds };
+  return { ...rest, owner: ownerLabel, assigneeUserIds, predecessorTaskIds };
 }
 
 export function loadWorkspace(userId: string) {
@@ -106,6 +106,17 @@ export function loadWorkspace(userId: string) {
       ? db.select().from(pendingTaskAssignments)
         .where(inArray(pendingTaskAssignments.taskId, projectTasks.map((task) => task.id))).all()
       : [];
+    const dependencyRows = projectTasks.length
+      ? db.select({ taskId: taskDependencies.taskId, predecessorTaskId: taskDependencies.predecessorTaskId })
+        .from(taskDependencies).where(inArray(taskDependencies.taskId, projectTasks.map((task) => task.id))).all()
+      : [];
+    const depsByTask = new Map<string, string[]>();
+    for (const row of dependencyRows) {
+      const list = depsByTask.get(row.taskId);
+      if (list) list.push(row.predecessorTaskId);
+      else depsByTask.set(row.taskId, [row.predecessorTaskId]);
+    }
+    const visibleTaskIds = new Set(projectTasks.map((task) => task.id));
     for (const task of projectTasks) {
       const assigneeIds = role === 'viewer'
         ? [userId]
@@ -114,7 +125,9 @@ export function loadWorkspace(userId: string) {
           ...pendingRows.filter((assignment) => assignment.taskId === task.id)
             .map((assignment) => pendingAssigneeId(assignment.email)),
         ];
-      visibleTasks.push(taskForClient(task, assigneeIds));
+      const predecessorIds = (depsByTask.get(task.id) || [])
+        .filter((predId) => role !== 'viewer' || visibleTaskIds.has(predId));
+      visibleTasks.push(taskForClient(task, assigneeIds, predecessorIds));
     }
     if (projectTasks.length) {
       const childRows = db.select().from(subtasks)

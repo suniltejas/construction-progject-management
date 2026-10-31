@@ -146,6 +146,16 @@ test('project API enforces username auth, invitations and project roles', { time
     });
 
     const ownerCookie = await signIn(owner.username);
+    await t.test('sign in accepts either the username or the email', async () => {
+      const byEmail = await expectStatus('/auth/sign-in/email', 200, {
+        method: 'POST', body: { email: owner.email, password },
+      });
+      assert.match(byEmail.cookie, /session_token=/);
+      const unknownEmail = await request('/auth/sign-in/email', {
+        method: 'POST', body: { email: 'nobody@example.test', password },
+      });
+      assert.notEqual(unknownEmail.status, 200);
+    });
     const outsiderCookie = await signIn(outsider.username);
     const ownerSession = await expectStatus('/session', 200, { cookie: ownerCookie });
     assert.equal(ownerSession.data.user.username, owner.username);
@@ -332,6 +342,58 @@ test('project API enforces username auth, invitations and project roles', { time
       await expectStatus(`/subtasks/${privateChild.id}`, 204, { method: 'DELETE', cookie: ownerCookie });
       const fullyRestored = (await expectStatus('/workspace', 200, { cookie: ownerCookie })).data;
       assert.equal(fullyRestored.milestones.find((item: Json) => item.id === milestoneHidden.id).due, '2026-05-01');
+    });
+
+    await t.test('marking a task done records a completion date and reopening clears it', async () => {
+      const current = (await expectStatus('/workspace', 200, { cookie: ownerCookie })).data
+        .tasks.find((item: Json) => item.id === assigned.id);
+      assert.equal(current.completedAt ?? null, null);
+      const done = (await expectStatus(`/tasks/${assigned.id}`, 200, {
+        method: 'PATCH', cookie: editorCookie, body: { version: current.version, status: 'Done' },
+      })).data;
+      assert.ok(done.completedAt, 'completedAt should be set when marked done');
+      const again = (await expectStatus(`/tasks/${assigned.id}`, 200, {
+        method: 'PATCH', cookie: editorCookie, body: { version: done.version, status: 'Done' },
+      })).data;
+      assert.equal(again.completedAt, done.completedAt);
+      const reopened = (await expectStatus(`/tasks/${assigned.id}`, 200, {
+        method: 'PATCH', cookie: ownerCookie, body: { version: again.version, status: 'Not started' },
+      })).data;
+      assert.equal(reopened.completedAt, null);
+    });
+
+    await t.test('task predecessors are stored, validated, and scoped per viewer', async () => {
+      const find = (workspace: Json, id: string) => (workspace.tasks as Json[]).find((item) => item.id === id);
+      let ownerWorkspace = (await expectStatus('/workspace', 200, { cookie: ownerCookie })).data;
+      const assignedTask = find(ownerWorkspace, assigned.id)!;
+      const set = (await expectStatus(`/tasks/${assigned.id}`, 200, {
+        method: 'PATCH', cookie: editorCookie,
+        body: { version: assignedTask.version, predecessorTaskIds: [hidden.id] },
+      })).data;
+      assert.deepEqual(set.predecessorTaskIds, [hidden.id]);
+
+      ownerWorkspace = (await expectStatus('/workspace', 200, { cookie: ownerCookie })).data;
+      assert.deepEqual(find(ownerWorkspace, assigned.id)!.predecessorTaskIds, [hidden.id]);
+      const viewerWorkspace = (await expectStatus('/workspace', 200, { cookie: viewerCookie })).data;
+      assert.deepEqual(find(viewerWorkspace, assigned.id)!.predecessorTaskIds, []);
+
+      const hiddenTask = find(ownerWorkspace, hidden.id)!;
+      await expectStatus(`/tasks/${hidden.id}`, 400, {
+        method: 'PATCH', cookie: ownerCookie, body: { version: hiddenTask.version, predecessorTaskIds: [hidden.id] },
+      });
+      await expectStatus(`/tasks/${hidden.id}`, 400, {
+        method: 'PATCH', cookie: ownerCookie, body: { version: hiddenTask.version, predecessorTaskIds: [assigned.id] },
+      });
+
+      const otherProjectTask = (ownerWorkspace.tasks as Json[]).find((item) => item.projectId === projectB.id);
+      await expectStatus(`/tasks/${assigned.id}`, 400, {
+        method: 'PATCH', cookie: editorCookie, body: { version: set.version, predecessorTaskIds: [otherProjectTask!.id] },
+      });
+
+      const cleared = (await expectStatus(`/tasks/${assigned.id}`, 200, {
+        method: 'PATCH', cookie: editorCookie, body: { version: set.version, predecessorTaskIds: [] },
+      })).data;
+      assert.deepEqual(cleared.predecessorTaskIds, []);
     });
 
     await t.test('notes and files respect roles and round-trip data', async () => {

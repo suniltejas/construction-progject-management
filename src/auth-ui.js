@@ -19,7 +19,7 @@ function formError(form, message) {
 
 function renderLogin(onAuthenticated, { notice = '', username = '', afterSignIn } = {}) {
   authScreen.hidden = false;
-  authScreen.innerHTML = `<div class="auth-card"><div class="auth-brand"><span class="brand-mark">F<span></span></span><span>Fieldline<small>Project tracker</small></span></div><p class="eyebrow">Welcome back</p><h1>Sign in to your workspace</h1><p class="auth-intro">Use the username provided by your project owner.</p>${notice ? '<p class="auth-notice" id="authNotice"></p>' : ''}<form id="loginForm"><label>Username<input name="username" required autocomplete="username" autofocus></label><label>Password<input name="password" type="password" required autocomplete="current-password"></label><p class="auth-error" role="alert" hidden></p><button class="button primary" type="submit">Sign in</button></form></div>`;
+  authScreen.innerHTML = `<div class="auth-card"><div class="auth-brand"><span class="brand-mark">F<span></span></span><span>Fieldline<small>Project tracker</small></span></div><p class="eyebrow">Welcome back</p><h1>Sign in to your workspace</h1><p class="auth-intro">Sign in with your email or the username provided by your project owner.</p>${notice ? '<p class="auth-notice" id="authNotice"></p>' : ''}<form id="loginForm"><label>Email or username<input name="username" required autocomplete="username" autofocus></label><label>Password<input name="password" type="password" required autocomplete="current-password"></label><p class="auth-error" role="alert" hidden></p><button class="button primary" type="submit">Sign in</button></form></div>`;
   if (notice) authScreen.querySelector('#authNotice').textContent = notice;
   const form = authScreen.querySelector('#loginForm');
   if (username) form.elements.username.value = username;
@@ -28,8 +28,11 @@ function renderLogin(onAuthenticated, { notice = '', username = '', afterSignIn 
     const button = form.querySelector('button[type="submit"]');
     button.disabled = true;
     const { username, password } = Object.fromEntries(new FormData(form));
+    const identifier = String(username || '').trim();
     try {
-      const { error } = await authClient.signIn.username({ username, password });
+      const { error } = identifier.includes('@')
+        ? await authClient.signIn.email({ email: identifier.toLowerCase(), password })
+        : await authClient.signIn.username({ username: identifier, password });
       if (error) throw new Error(error.message || 'Sign in failed');
       if (afterSignIn) await afterSignIn();
       await onAuthenticated();

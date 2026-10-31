@@ -26,3 +26,11 @@
 .file-meta small{color:#82959d;font-size:11px}
 .file-input-label{display:block;color:#3d5664;font-size:12px;font-weight:700;margin-bottom:16px}
 .file-input-label input{display:block;width:100%;margin-top:7px;padding:9px 10px;border:1px dashed #cfdbdf;border-radius:6px;background:#fff;color:#1d3848;font-size:12px}
+
+.due-overdue{color:#b54a43;font-weight:700}
+
+.task-deps{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-top:6px}
+.dep-label{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#8b9ea4;font-weight:750}
+.dep-chip{display:inline-flex;align-items:center;gap:3px;border-radius:4px;padding:2px 6px;font-size:11px;font-weight:650;background:#eef1f2;color:#516873}
+.dep-chip.done{background:#e6f3ed;color:#328060}
+.dep-chip.pending{background:#fff1d5;color:#966d1b}

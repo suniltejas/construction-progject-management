@@ -16,6 +16,7 @@
     "db:check": "drizzle-kit check",
     "owner:create": "tsx scripts/create-owner.ts",
     "reset-password": "tsx scripts/reset-password.ts",
+    "seed:demo": "tsx scripts/seed-demo.ts",
     "mail:test": "tsx scripts/send-test-mail.ts"
   },
   "dependencies": {

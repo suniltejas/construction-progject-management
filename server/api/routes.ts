@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, unlinkSync } from 'node:fs';
 import { Router, type Request, type RequestHandler, type Response } from 'express';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { latestSubtaskDeadline, latestTaskDeadline, syncMilestoneDeadline, syncTaskDeadline } from '../db/deadlines.js';
-import { attachments, milestones, notes, pendingTaskAssignments, projectMemberships, projects, subtasks, taskAssignments, tasks } from '../db/schema.js';
+import { attachments, milestones, notes, pendingTaskAssignments, projectMemberships, projects, subtasks, taskAssignments, taskDependencies, tasks } from '../db/schema.js';
 import { classify, storedFilePath, withUploadFile } from '../files/storage.js';
 import { listMembers, loadWorkspace, pendingAssigneeId, requireRole, requireUser, taskForClient, validAssignees } from './access.js';
 import { ApiError, assert } from './errors.js';
@@ -51,10 +51,34 @@ function fullTask(id: string) {
     .where(eq(taskAssignments.taskId, id)).all();
   const pending = db.select({ email: pendingTaskAssignments.email }).from(pendingTaskAssignments)
     .where(eq(pendingTaskAssignments.taskId, id)).all();
+  const predecessors = db.select({ id: taskDependencies.predecessorTaskId }).from(taskDependencies)
+    .where(eq(taskDependencies.taskId, id)).all().map((row) => row.id);
   return taskForClient(task, [
     ...assigned.map((item) => item.userId),
     ...pending.map((item) => pendingAssigneeId(item.email)),
-  ]);
+  ], predecessors);
+}
+
+function validatePredecessors(projectId: string, taskId: string, predecessorIds: string[]): string[] {
+  const ids = [...new Set(predecessorIds)];
+  if (ids.includes(taskId)) throw new ApiError(400, 'A task cannot be its own predecessor');
+  const existing = ids.length
+    ? db.select({ id: tasks.id }).from(tasks)
+      .where(and(eq(tasks.projectId, projectId), inArray(tasks.id, ids))).all()
+    : [];
+  if (existing.length !== ids.length) throw new ApiError(400, 'Every predecessor must be a task in this project');
+  const stack = [...ids];
+  const seen = new Set<string>();
+  while (stack.length) {
+    const current = stack.pop()!;
+    if (current === taskId) throw new ApiError(400, 'These predecessors would create a dependency loop');
+    if (seen.has(current)) continue;
+    seen.add(current);
+    const rows = db.select({ id: taskDependencies.predecessorTaskId }).from(taskDependencies)
+      .where(and(eq(taskDependencies.projectId, projectId), eq(taskDependencies.taskId, current))).all();
+    for (const row of rows) stack.push(row.id);
+  }
+  return ids;
 }
 
 function viewerCanSeeTask(taskId: string, userId: string): boolean {
@@ -189,17 +213,21 @@ appRouter.delete('/milestones/:id', async (req, res) => {
 
 appRouter.post('/tasks', async (req, res) => {
   const user = await requireUser(req);
-  const { owner, assigneeUserIds, ...input } = parse(taskInput, req.body);
+  const { owner, assigneeUserIds, predecessorTaskIds, ...input } = parse(taskInput, req.body);
   requireRole(input.projectId, user.id, ['owner', 'editor']);
   requireMilestone(input.projectId, input.milestoneId);
   const assignees = validAssignees(input.projectId, assigneeUserIds);
   const id = randomUUID();
+  const predecessors = validatePredecessors(input.projectId, id, predecessorTaskIds);
   db.transaction((tx) => {
-    tx.insert(tasks).values({ id, ...input, ownerLabel: owner, plannedDue: input.due }).run();
+    tx.insert(tasks).values({ id, ...input, ownerLabel: owner, plannedDue: input.due,
+      ...(input.status === 'Done' ? { completedAt: sql`CURRENT_TIMESTAMP` } : {}) }).run();
     for (const userId of assignees.userIds) tx.insert(taskAssignments)
       .values({ taskId: id, projectId: input.projectId, userId }).run();
     for (const email of assignees.pendingEmails) tx.insert(pendingTaskAssignments)
       .values({ taskId: id, projectId: input.projectId, email }).run();
+    for (const predecessorId of predecessors) tx.insert(taskDependencies)
+      .values({ taskId: id, projectId: input.projectId, predecessorTaskId: predecessorId }).run();
     syncMilestoneDeadline(input.milestoneId);
   });
   res.status(201).json(fullTask(id));
@@ -210,15 +238,24 @@ appRouter.patch('/tasks/:id', async (req, res) => {
   const id = routeId(req.params.id);
   const task = existingTask(id);
   requireRole(task.projectId, user.id, ['owner', 'editor']);
-  const { version, projectId, owner, assigneeUserIds, due, ...input } = parse(taskPatch, req.body);
+  const { version, projectId, owner, assigneeUserIds, due, predecessorTaskIds, ...input } = parse(taskPatch, req.body);
   assert(projectId === undefined || projectId === task.projectId, 400, 'A task cannot move projects');
   if (input.milestoneId) requireMilestone(task.projectId, input.milestoneId);
   const assignees = assigneeUserIds === undefined ? undefined : validAssignees(task.projectId, assigneeUserIds);
+  const predecessors = predecessorTaskIds === undefined
+    ? undefined
+    : validatePredecessors(task.projectId, id, predecessorTaskIds);
   db.transaction((tx) => {
     const plannedDue = due ?? task.plannedDue ?? task.due;
+    const completedAt = input.status === undefined
+      ? {}
+      : input.status === 'Done'
+        ? (task.status === 'Done' ? {} : { completedAt: sql`CURRENT_TIMESTAMP` })
+        : { completedAt: null };
     const updated = tx.update(tasks).set({ ...input, plannedDue,
       due: latestSubtaskDeadline(id) ?? plannedDue,
       ...(owner === undefined ? {} : { ownerLabel: owner }),
+      ...completedAt,
       version: sql`${tasks.version} + 1`, updatedAt: sql`CURRENT_TIMESTAMP` })
       .where(and(eq(tasks.id, id), eq(tasks.version, version))).returning({ id: tasks.id }).get();
     if (!updated) throw new ApiError(409, 'Task changed elsewhere. Refresh and try again');
@@ -229,6 +266,11 @@ appRouter.patch('/tasks/:id', async (req, res) => {
         .values({ taskId: id, projectId: task.projectId, userId }).run();
       for (const email of assignees.pendingEmails) tx.insert(pendingTaskAssignments)
         .values({ taskId: id, projectId: task.projectId, email }).run();
+    }
+    if (predecessors !== undefined) {
+      tx.delete(taskDependencies).where(eq(taskDependencies.taskId, id)).run();
+      for (const predecessorId of predecessors) tx.insert(taskDependencies)
+        .values({ taskId: id, projectId: task.projectId, predecessorTaskId: predecessorId }).run();
     }
     syncMilestoneDeadline(task.milestoneId);
     if (input.milestoneId && input.milestoneId !== task.milestoneId) syncMilestoneDeadline(input.milestoneId);
