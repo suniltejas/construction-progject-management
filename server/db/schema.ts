@@ -63,6 +63,7 @@ export const tasks = sqliteTable('tasks', {
   due: text('due').notNull(),
   plannedDue: text('planned_due'),
   status: text('status').notNull().default('Not started'),
+  completedAt: text('completed_at'),
   priority: text('priority').notNull().default('Normal'),
   version: integer('version').notNull().default(1),
   createdAt: text('created_at').notNull().default(sql`(CURRENT_TIMESTAMP)`),
@@ -91,6 +92,7 @@ export const subtasks = sqliteTable('subtasks', {
   name: text('name').notNull(),
   due: text('due'),
   ownerAssigneeId: text('owner_assignee_id'),
+  crewLabel: text('crew_label').notNull().default(''),
   status: text('status').notNull().default('Not started'),
   version: integer('version').notNull().default(1),
   createdAt: text('created_at').notNull().default(sql`(CURRENT_TIMESTAMP)`),
@@ -168,4 +170,64 @@ export const pendingTaskAssignments = sqliteTable('pending_task_assignments', {
     name: 'pending_task_assignments_same_project_task_fk',
   }).onDelete('cascade'),
   check('pending_task_assignments_normalized_email_check', sql`${table.email} = lower(trim(${table.email}))`),
+]);
+
+// Timestamped notes attached to a task or subtask. parentType scopes parentId
+// to the right table; projectId enables role checks and cascade cleanup.
+export const notes = sqliteTable('notes', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  parentType: text('parent_type', { enum: ['task', 'subtask'] }).notNull(),
+  parentId: text('parent_id').notNull(),
+  body: text('body').notNull(),
+  authorUserId: text('author_user_id').references(() => user.id, { onDelete: 'set null' }),
+  createdAt: text('created_at').notNull().default(sql`(CURRENT_TIMESTAMP)`),
+}, (table) => [
+  index('notes_parent_idx').on(table.parentType, table.parentId),
+  index('notes_project_idx').on(table.projectId),
+  check('notes_parent_type_check', sql`${table.parentType} in ('task', 'subtask')`),
+  check('notes_body_check', sql`length(trim(${table.body})) > 0`),
+]);
+
+// Files stored on disk; this table indexes them. `id` is also the on-disk
+// filename (a UUID), never the user's original name.
+export const attachments = sqliteTable('attachments', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  parentType: text('parent_type', { enum: ['task', 'milestone'] }).notNull(),
+  parentId: text('parent_id').notNull(),
+  originalName: text('original_name').notNull(),
+  mimeType: text('mime_type').notNull(),
+  sizeBytes: integer('size_bytes').notNull(),
+  uploadedUserId: text('uploaded_user_id').references(() => user.id, { onDelete: 'set null' }),
+  createdAt: text('created_at').notNull().default(sql`(CURRENT_TIMESTAMP)`),
+}, (table) => [
+  index('attachments_parent_idx').on(table.parentType, table.parentId),
+  index('attachments_project_idx').on(table.projectId),
+  check('attachments_parent_type_check', sql`${table.parentType} in ('task', 'milestone')`),
+  check('attachments_size_check', sql`${table.sizeBytes} >= 0`),
+]);
+
+// Predecessor edges: `predecessor_task_id` must be finished before `task_id`.
+// Both tasks are forced into the same project by the composite foreign keys.
+export const taskDependencies = sqliteTable('task_dependencies', {
+  projectId: text('project_id').notNull(),
+  taskId: text('task_id').notNull(),
+  predecessorTaskId: text('predecessor_task_id').notNull(),
+  createdAt: text('created_at').notNull().default(sql`(CURRENT_TIMESTAMP)`),
+}, (table) => [
+  primaryKey({ columns: [table.taskId, table.predecessorTaskId] }),
+  index('task_dependencies_task_idx').on(table.projectId, table.taskId),
+  index('task_dependencies_predecessor_idx').on(table.projectId, table.predecessorTaskId),
+  foreignKey({
+    columns: [table.projectId, table.taskId],
+    foreignColumns: [tasks.projectId, tasks.id],
+    name: 'task_dependencies_task_fk',
+  }).onDelete('cascade'),
+  foreignKey({
+    columns: [table.projectId, table.predecessorTaskId],
+    foreignColumns: [tasks.projectId, tasks.id],
+    name: 'task_dependencies_predecessor_fk',
+  }).onDelete('cascade'),
+  check('task_dependencies_not_self_check', sql`${table.taskId} <> ${table.predecessorTaskId}`),
 ]);

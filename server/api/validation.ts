@@ -46,6 +46,7 @@ export const taskInput = z.strictObject({
   status: z.enum(['Not started', 'In progress', 'Blocked', 'Done']).default('Not started'),
   priority: z.enum(['Normal', 'High', 'Critical']).default('Normal'),
   assigneeUserIds: z.array(required(100)).max(100).default([]),
+  predecessorTaskIds: z.array(required(100)).max(100).default([]),
 });
 export const taskPatch = z.strictObject({
   projectId: required(100).optional(),
@@ -56,6 +57,7 @@ export const taskPatch = z.strictObject({
   status: z.enum(['Not started', 'In progress', 'Blocked', 'Done']).optional(),
   priority: z.enum(['Normal', 'High', 'Critical']).optional(),
   assigneeUserIds: z.array(required(100)).max(100).optional(),
+  predecessorTaskIds: z.array(required(100)).max(100).optional(),
   version: z.number().int().positive(),
 });
 
@@ -64,12 +66,14 @@ export const subtaskInput = z.strictObject({
   name: required(200),
   due: date,
   ownerAssigneeId: required(100),
+  crewLabel: text(160).default(''),
   status: z.enum(['Not started', 'In progress', 'Blocked', 'Done']).default('Not started'),
 });
 export const subtaskPatch = z.strictObject({
   name: required(200).optional(),
   due: date.optional(),
   ownerAssigneeId: text(100).optional(),
+  crewLabel: text(160).optional(),
   status: z.enum(['Not started', 'In progress', 'Blocked', 'Done']).optional(),
   version: z.number().int().positive(),
 });
@@ -81,6 +85,7 @@ export const inviteInput = z.strictObject({
 });
 export const acceptInput = z.strictObject({ token: required(200), password: z.string().optional() });
 export const memberPatch = z.strictObject({ role: z.enum(['editor', 'viewer']) });
+export const noteBodyInput = z.strictObject({ body: text(5000).min(1) });
 
 export function parse<T extends z.ZodType>(schema: T, input: unknown): z.output<T> {
   const result = schema.safeParse(input);

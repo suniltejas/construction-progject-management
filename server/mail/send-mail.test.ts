@@ -18,7 +18,7 @@ test('sends invitations through the Resend API with escaped HTML', async () => {
   process.env.RESEND_API_KEY = 'test-key';
   process.env.RESEND_FROM = 'Projects <projects@example.com>';
   let called = false;
-  globalThis.fetch = async (input, init) => {
+  globalThis.fetch = (async (input, init) => {
     called = true;
     assert.equal(input, 'https://api.resend.com/emails');
     assert.equal(init?.method, 'POST');
@@ -30,7 +30,7 @@ test('sends invitations through the Resend API with escaped HTML', async () => {
     assert.equal(body.text, 'Hello <invitee>\nOpen link');
     assert.equal(body.html, '<p>Hello &lt;invitee&gt;<br>Open link</p>');
     return new Response(JSON.stringify({ id: 'email-id' }), { status: 200 });
-  };
+  }) as typeof fetch;
   await sendMail({ to: 'invitee@example.com', subject: 'Invitation', text: 'Hello <invitee>\nOpen link' });
   assert.equal(called, true);
 });
@@ -38,7 +38,7 @@ test('sends invitations through the Resend API with escaped HTML', async () => {
 test('reports a rejected Resend request', async () => {
   process.env.RESEND_API_KEY = 'test-key';
   process.env.RESEND_FROM = 'projects@example.com';
-  globalThis.fetch = async () => new Response('{}', { status: 403 });
+  globalThis.fetch = ((async () => new Response('{}', { status: 403 })) as unknown) as typeof fetch;
   await assert.rejects(
     sendMail({ to: 'invitee@example.com', subject: 'Invitation', text: 'Hello' }),
     /Resend rejected email \(HTTP 403\)/,

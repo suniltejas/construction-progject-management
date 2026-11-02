@@ -8,7 +8,7 @@ import { appOrigin } from '../auth/auth.js';
 import { createInvitedUser, normalizeUsername } from '../auth/invited-user.js';
 import { getSessionFromRequest } from '../auth/session.js';
 import { invitations, pendingTaskAssignments, projectMemberships, projects, subtasks, taskAssignments } from '../db/schema.js';
-import { sendProjectInvitation } from '../mail/send-mail.js';
+import { buildInvitationMessage, sendInvitationEmail } from '../mail/send-mail.js';
 import { pendingAssigneeId, requireRole, requireUser } from './access.js';
 import { ApiError, assert } from './errors.js';
 import { acceptInput, inviteInput, parse } from './validation.js';
@@ -90,16 +90,11 @@ projectInvitationRouter.post('/projects/:id/invitations', async (req, res) => {
   const expiresAt = new Date(now.getTime() + invitationLifetimeMs);
   db.insert(invitations).values({ id, projectId, email, username, role: input.role,
     tokenHash: tokenHash(token), invitedByUserId: sender.id, expiresAt }).run();
-  try {
-    await sendProjectInvitation({ email, username, projectName: project.name,
-      inviteUrl: `${appOrigin}/projects/?invite=${encodeURIComponent(token)}`,
-      existingUser: Boolean(account) });
-  } catch (error) {
-    db.update(invitations).set({ revokedAt: new Date() }).where(eq(invitations.id, id)).run();
-    console.error('Invitation email failed', error);
-    throw new ApiError(502, 'Invitation email could not be sent');
-  }
-  res.status(201).json({ id, username, email, role: input.role, expiresAt });
+  const inviteUrl = `${appOrigin}/projects/?invite=${encodeURIComponent(token)}`;
+  const invitationMessage = buildInvitationMessage({ email, username, projectName: project.name,
+    inviteUrl, existingUser: Boolean(account) });
+  await sendInvitationEmail(invitationMessage);
+  res.status(201).json({ id, username, email, role: input.role, expiresAt, inviteUrl });
 });
 
 projectInvitationRouter.delete('/projects/:id/invitations/:invitationId', async (req, res) => {

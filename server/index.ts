@@ -14,9 +14,12 @@ const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 'loopback');
 
-// Better Auth must receive the original request path and unparsed body.
-app.all('/projects/api/auth/*splat', toNodeHandler(auth));
+// Body parsing must run before the Better Auth route so the raw request stream
+// is read exactly once (express.json populates req.body, which better-auth then
+// consumes). Registering the raw-body reader here races with auth's own reader
+// and intermittently yields "Invalid JSON in request body" on sign-in.
 app.use('/projects/api', express.json({ limit: '100kb' }));
+app.all('/projects/api/auth/*splat', toNodeHandler(auth));
 app.use('/projects/api', invitationRouter);
 app.use('/projects/api', projectInvitationRouter);
 app.use('/projects/api', appRouter);

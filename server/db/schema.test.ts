@@ -11,7 +11,7 @@ const migrationsFolder = fileURLToPath(new URL('../../drizzle/', import.meta.url
 
 function freshDatabase(): Database.Database {
   const sqlite = new Database(':memory:');
-  sqlite.pragma('foreign_keys = ON');
+  sqlite.exec(`PRAGMA foreign_keys = ON`);
   migrate(drizzle(sqlite, { schema: { ...authSchema, ...appSchema } }), { migrationsFolder });
   sqlite.exec(`
     INSERT INTO user (id, name, email, username) VALUES
@@ -80,6 +80,45 @@ test('project membership and invitation constraints reject invalid role or dupli
     sqlite.prepare(`INSERT INTO invitations
       (id, project_id, email, username, role, token_hash, expires_at)
       VALUES ('i2', 'p1', 'viewer@example.com', 'viewer2', 'editor', 'hash2', 2000000000000)`).run();
+  } finally {
+    sqlite.close();
+  }
+});
+
+test('notes and attachments are constrained and cascade with the project', () => {
+  const sqlite = freshDatabase();
+  try {
+    sqlite.prepare(`INSERT INTO notes (id, project_id, parent_type, parent_id, body)
+      VALUES ('n1', 'p1', 'task', 't1', 'First note')`).run();
+    assert.throws(() => sqlite.prepare(`INSERT INTO notes (id, project_id, parent_type, parent_id, body)
+      VALUES ('n2', 'p1', 'task', 't1', '   ')`).run(), /CHECK constraint failed/);
+    assert.throws(() => sqlite.prepare(`INSERT INTO notes (id, project_id, parent_type, parent_id, body)
+      VALUES ('n3', 'p1', 'milestone', 'm1', 'Wrong type')`).run(), /CHECK constraint failed/);
+    sqlite.prepare(`INSERT INTO attachments (id, project_id, parent_type, parent_id, original_name, mime_type, size_bytes)
+      VALUES ('a1', 'p1', 'milestone', 'm1', 'drawing.pdf', 'application/pdf', 10)`).run();
+    assert.throws(() => sqlite.prepare(`INSERT INTO attachments (id, project_id, parent_type, parent_id, original_name, mime_type, size_bytes)
+      VALUES ('a2', 'p1', 'task', 't1', 'f.png', 'image/png', -1)`).run(), /CHECK constraint failed/);
+    assert.throws(() => sqlite.prepare(`INSERT INTO attachments (id, project_id, parent_type, parent_id, original_name, mime_type, size_bytes)
+      VALUES ('a3', 'p1', 'subtask', 's1', 'f.png', 'image/png', 1)`).run(), /CHECK constraint failed/);
+    sqlite.prepare(`DELETE FROM projects WHERE id = 'p1'`).run();
+    assert.equal((sqlite.prepare(`SELECT count(*) AS count FROM notes WHERE id = 'n1'`).get() as { count: number }).count, 0);
+    assert.equal((sqlite.prepare(`SELECT count(*) AS count FROM attachments WHERE id = 'a1'`).get() as { count: number }).count, 0);
+  } finally {
+    sqlite.close();
+  }
+});
+
+test('task dependencies reject self and cross-project edges and cascade with tasks', () => {
+  const sqlite = freshDatabase();
+  try {
+    sqlite.prepare(`INSERT INTO tasks (id, project_id, milestone_id, name, due) VALUES ('t1','p1','m1','A','2026-04-01')`).run();
+    sqlite.prepare(`INSERT INTO tasks (id, project_id, milestone_id, name, due) VALUES ('t2','p1','m1','B','2026-04-02')`).run();
+    sqlite.prepare(`INSERT INTO tasks (id, project_id, milestone_id, name, due) VALUES ('t3','p2','m2','C','2026-04-03')`).run();
+    sqlite.prepare(`INSERT INTO task_dependencies (project_id, task_id, predecessor_task_id) VALUES ('p1','t2','t1')`).run();
+    assert.throws(() => sqlite.prepare(`INSERT INTO task_dependencies (project_id, task_id, predecessor_task_id) VALUES ('p1','t1','t1')`).run(), /CHECK constraint failed/);
+    assert.throws(() => sqlite.prepare(`INSERT INTO task_dependencies (project_id, task_id, predecessor_task_id) VALUES ('p1','t2','t3')`).run(), /FOREIGN KEY constraint failed/);
+    sqlite.prepare(`DELETE FROM tasks WHERE id = 't1'`).run();
+    assert.equal((sqlite.prepare(`SELECT count(*) AS count FROM task_dependencies WHERE task_id = 't2'`).get() as { count: number }).count, 0);
   } finally {
     sqlite.close();
   }

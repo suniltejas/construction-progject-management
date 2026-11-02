@@ -7,8 +7,8 @@ import { basename, join, resolve, sep } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import Database from 'better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
+import Database from 'better-sqlite3';
 
 const projectRoot = fileURLToPath(new URL('../../', import.meta.url));
 const migrationsFolder = fileURLToPath(new URL('../../drizzle/', import.meta.url));
@@ -43,6 +43,8 @@ test('project API enforces username auth, invitations and project roles', { time
   const env = {
     ...process.env,
     DATABASE_PATH: join(directory, 'test.sqlite'),
+    FILES_DIR: join(directory, 'files'),
+    FILES_MAX_BYTES: '2048',
     APP_ORIGIN: origin,
     BETTER_AUTH_SECRET: 'integration-test-secret-at-least-32-bytes-long',
     NODE_ENV: 'development',
@@ -80,6 +82,20 @@ test('project API enforces username auth, invitations and project roles', { time
     }
     return { status: response.status, data, cookie: sessionCookie(response) };
   };
+  const upload = async (path: string, form: FormData, cookie: string) => {
+    const response = await fetch(`${origin}/projects/api${path}`, {
+      method: 'POST',
+      headers: { origin, cookie },
+      body: form,
+    });
+    const raw = await response.text();
+    let data: Json = {};
+    if (raw) {
+      try { data = JSON.parse(raw) as Json; }
+      catch { data = { raw }; }
+    }
+    return { status: response.status, data };
+  };
   const expectStatus = async (path: string, status: number, options: { method?: string; body?: Json; cookie?: string } = {}) => {
     const result = await request(path, options);
     assert.equal(result.status, status, `${options.method || 'GET'} ${path}: ${JSON.stringify(result.data)}`);
@@ -93,16 +109,12 @@ test('project API enforces username auth, invitations and project roles', { time
     return result.cookie;
   };
   const issueInvitation = async (projectId: string, username: string, email: string, role: 'editor' | 'viewer', cookie: string) => {
-    const before = output.length;
     const issued = await expectStatus(`/projects/${projectId}/invitations`, 201, {
       method: 'POST', cookie, body: { username, email, role },
     });
-    for (let attempt = 0; attempt < 40; attempt++) {
-      const match = output.slice(before).match(/\/projects\/\?invite=([A-Za-z0-9_-]+)/);
-      if (match) return { token: match[1], id: issued.data.id as string };
-      await delay(25);
-    }
-    throw new Error(`Invitation link was not logged in local development. Output: ${output}`);
+    const match = String(issued.data.inviteUrl).match(/invite=([A-Za-z0-9_-]+)/);
+    assert.match(String(issued.data.inviteUrl), /invite=([A-Za-z0-9_-]+)/, `No creation link returned: ${JSON.stringify(issued.data)}`);
+    return { token: match![1], id: issued.data.id as string };
   };
   const invitationToken = async (projectId: string, username: string, email: string, role: 'editor' | 'viewer', cookie: string) =>
     (await issueInvitation(projectId, username, email, role, cookie)).token;
@@ -134,6 +146,16 @@ test('project API enforces username auth, invitations and project roles', { time
     });
 
     const ownerCookie = await signIn(owner.username);
+    await t.test('sign in accepts either the username or the email', async () => {
+      const byEmail = await expectStatus('/auth/sign-in/email', 200, {
+        method: 'POST', body: { email: owner.email, password },
+      });
+      assert.match(byEmail.cookie, /session_token=/);
+      const unknownEmail = await request('/auth/sign-in/email', {
+        method: 'POST', body: { email: 'nobody@example.test', password },
+      });
+      assert.notEqual(unknownEmail.status, 200);
+    });
     const outsiderCookie = await signIn(outsider.username);
     const ownerSession = await expectStatus('/session', 200, { cookie: ownerCookie });
     assert.equal(ownerSession.data.user.username, owner.username);
@@ -246,8 +268,9 @@ test('project API enforces username auth, invitations and project roles', { time
       const visible = (await expectStatus('/subtasks', 201, {
         method: 'POST', cookie: editorCookie,
         body: { taskId: assigned.id, name: 'Pour concrete', due: '2026-07-10',
-          ownerAssigneeId: viewer.userId, status: 'Not started' },
+          ownerAssigneeId: viewer.userId, crewLabel: 'Concrete crew', status: 'Not started' },
       })).data;
+      assert.equal(visible.crewLabel, 'Concrete crew');
       const privateChild = (await expectStatus('/subtasks', 201, {
         method: 'POST', cookie: ownerCookie,
         body: { taskId: hidden.id, name: 'Inspect another area', due: '2026-06-10',
@@ -260,6 +283,7 @@ test('project API enforces username auth, invitations and project roles', { time
       assert.deepEqual(viewerWorkspace.subtasks.map((item: Json) => item.id), [visible.id]);
       assert.equal(viewerWorkspace.subtasks[0].taskId, assigned.id);
       assert.equal(viewerWorkspace.subtasks[0].ownerAssigneeId, viewer.userId);
+      assert.equal(viewerWorkspace.subtasks[0].crewLabel, 'Concrete crew');
       const childOnlyParent = (await expectStatus('/tasks', 201, {
         method: 'POST', cookie: ownerCookie,
         body: taskInput(projectA.id, milestoneA.id, 'Subtask-owned parent', []),
@@ -318,6 +342,142 @@ test('project API enforces username auth, invitations and project roles', { time
       await expectStatus(`/subtasks/${privateChild.id}`, 204, { method: 'DELETE', cookie: ownerCookie });
       const fullyRestored = (await expectStatus('/workspace', 200, { cookie: ownerCookie })).data;
       assert.equal(fullyRestored.milestones.find((item: Json) => item.id === milestoneHidden.id).due, '2026-05-01');
+    });
+
+    await t.test('marking a task done records a completion date and reopening clears it', async () => {
+      const current = (await expectStatus('/workspace', 200, { cookie: ownerCookie })).data
+        .tasks.find((item: Json) => item.id === assigned.id);
+      assert.equal(current.completedAt ?? null, null);
+      const done = (await expectStatus(`/tasks/${assigned.id}`, 200, {
+        method: 'PATCH', cookie: editorCookie, body: { version: current.version, status: 'Done' },
+      })).data;
+      assert.ok(done.completedAt, 'completedAt should be set when marked done');
+      const again = (await expectStatus(`/tasks/${assigned.id}`, 200, {
+        method: 'PATCH', cookie: editorCookie, body: { version: done.version, status: 'Done' },
+      })).data;
+      assert.equal(again.completedAt, done.completedAt);
+      const reopened = (await expectStatus(`/tasks/${assigned.id}`, 200, {
+        method: 'PATCH', cookie: ownerCookie, body: { version: again.version, status: 'Not started' },
+      })).data;
+      assert.equal(reopened.completedAt, null);
+    });
+
+    await t.test('task predecessors are stored, validated, and scoped per viewer', async () => {
+      const find = (workspace: Json, id: string) => (workspace.tasks as Json[]).find((item) => item.id === id);
+      let ownerWorkspace = (await expectStatus('/workspace', 200, { cookie: ownerCookie })).data;
+      const assignedTask = find(ownerWorkspace, assigned.id)!;
+      const set = (await expectStatus(`/tasks/${assigned.id}`, 200, {
+        method: 'PATCH', cookie: editorCookie,
+        body: { version: assignedTask.version, predecessorTaskIds: [hidden.id] },
+      })).data;
+      assert.deepEqual(set.predecessorTaskIds, [hidden.id]);
+
+      ownerWorkspace = (await expectStatus('/workspace', 200, { cookie: ownerCookie })).data;
+      assert.deepEqual(find(ownerWorkspace, assigned.id)!.predecessorTaskIds, [hidden.id]);
+      const viewerWorkspace = (await expectStatus('/workspace', 200, { cookie: viewerCookie })).data;
+      assert.deepEqual(find(viewerWorkspace, assigned.id)!.predecessorTaskIds, []);
+
+      const hiddenTask = find(ownerWorkspace, hidden.id)!;
+      await expectStatus(`/tasks/${hidden.id}`, 400, {
+        method: 'PATCH', cookie: ownerCookie, body: { version: hiddenTask.version, predecessorTaskIds: [hidden.id] },
+      });
+      await expectStatus(`/tasks/${hidden.id}`, 400, {
+        method: 'PATCH', cookie: ownerCookie, body: { version: hiddenTask.version, predecessorTaskIds: [assigned.id] },
+      });
+
+      const otherProjectTask = (ownerWorkspace.tasks as Json[]).find((item) => item.projectId === projectB.id);
+      await expectStatus(`/tasks/${assigned.id}`, 400, {
+        method: 'PATCH', cookie: editorCookie, body: { version: set.version, predecessorTaskIds: [otherProjectTask!.id] },
+      });
+
+      const cleared = (await expectStatus(`/tasks/${assigned.id}`, 200, {
+        method: 'PATCH', cookie: editorCookie, body: { version: set.version, predecessorTaskIds: [] },
+      })).data;
+      assert.deepEqual(cleared.predecessorTaskIds, []);
+    });
+
+    await t.test('notes and files respect roles and round-trip data', async () => {
+      const note = (await expectStatus(`/tasks/${assigned.id}/notes`, 201, {
+        method: 'POST', cookie: editorCookie, body: { body: 'Ordered extra rebar' },
+      })).data;
+      assert.equal(note.parentType, 'task');
+      assert.equal(note.parentId, assigned.id);
+      assert.equal(note.body, 'Ordered extra rebar');
+      assert.equal(note.authorUsername, 'editor1');
+
+      await expectStatus(`/tasks/${assigned.id}/notes`, 403, {
+        method: 'POST', cookie: viewerCookie, body: { body: 'not allowed' },
+      });
+      await expectStatus(`/tasks/${assigned.id}/notes`, 404, {
+        method: 'POST', cookie: outsiderCookie, body: { body: 'other project' },
+      });
+
+      const viewerNotes = (await expectStatus('/workspace', 200, { cookie: viewerCookie })).data;
+      assert(viewerNotes.notes.some((entry: Json) => entry.id === note.id));
+      const ownerNotes = (await expectStatus('/workspace', 200, { cookie: ownerCookie })).data;
+      assert(ownerNotes.notes.some((entry: Json) => entry.id === note.id));
+
+      const child = (await expectStatus('/subtasks', 201, {
+        method: 'POST', cookie: editorCookie,
+        body: { taskId: assigned.id, name: 'Note child', due: '2026-07-20', ownerAssigneeId: editor.userId },
+      })).data;
+      const childNote = (await expectStatus(`/subtasks/${child.id}/notes`, 201, {
+        method: 'POST', cookie: editorCookie, body: { body: 'Subtask detail' },
+      })).data;
+      assert.equal(childNote.parentType, 'subtask');
+      assert.equal(childNote.parentId, child.id);
+
+      await expectStatus(`/notes/${note.id}`, 204, { method: 'DELETE', cookie: ownerCookie });
+      const afterNoteDelete = (await expectStatus('/workspace', 200, { cookie: ownerCookie })).data;
+      assert(!afterNoteDelete.notes.some((entry: Json) => entry.id === note.id));
+
+      const pngBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
+      const pngForm = () => {
+        const form = new FormData();
+        form.append('file', new Blob([pngBytes], { type: 'image/png' }), 'site-plan.png');
+        return form;
+      };
+      const uploaded = await upload(`/tasks/${assigned.id}/files`, pngForm(), editorCookie);
+      assert.equal(uploaded.status, 201, JSON.stringify(uploaded.data));
+      const fileId = uploaded.data.id as string;
+      assert.equal(uploaded.data.originalName, 'site-plan.png');
+      assert.equal(uploaded.data.mimeType, 'image/png');
+      assert.equal(uploaded.data.sizeBytes, pngBytes.length);
+
+      const viewerFiles = (await expectStatus('/workspace', 200, { cookie: viewerCookie })).data;
+      assert(viewerFiles.files.some((entry: Json) => entry.id === fileId));
+
+      const download = await fetch(`${origin}/projects/api/files/${fileId}`, { headers: { origin, cookie: viewerCookie } });
+      assert.equal(download.status, 200);
+      assert.equal(download.headers.get('content-type'), 'image/png');
+      assert.deepEqual([...new Uint8Array(await download.arrayBuffer())], [...pngBytes]);
+
+      const viewerUpload = await upload(`/tasks/${assigned.id}/files`, pngForm(), viewerCookie);
+      assert.equal(viewerUpload.status, 403, JSON.stringify(viewerUpload.data));
+
+      const badForm = new FormData();
+      badForm.append('file', new Blob([new Uint8Array([1, 2, 3])], { type: 'application/zip' }), 'archive.zip');
+      const bad = await upload(`/tasks/${assigned.id}/files`, badForm, editorCookie);
+      assert.equal(bad.status, 400, JSON.stringify(bad.data));
+
+      const bigForm = new FormData();
+      bigForm.append('file', new Blob([new Uint8Array(4096)], { type: 'image/png' }), 'big.png');
+      const big = await upload(`/tasks/${assigned.id}/files`, bigForm, editorCookie);
+      assert.equal(big.status, 413, JSON.stringify(big.data));
+
+      const pdfForm = new FormData();
+      pdfForm.append('file', new Blob([new Uint8Array([37, 80, 68, 70])], { type: 'application/pdf' }), 'drawing.pdf');
+      const milestoneUpload = await upload(`/milestones/${milestoneA.id}/files`, pdfForm, ownerCookie);
+      assert.equal(milestoneUpload.status, 201, JSON.stringify(milestoneUpload.data));
+      const milestoneFileId = milestoneUpload.data.id as string;
+      const pdfDownload = await fetch(`${origin}/projects/api/files/${milestoneFileId}`, { headers: { origin, cookie: ownerCookie } });
+      assert.equal(pdfDownload.status, 200);
+      assert.equal(pdfDownload.headers.get('content-type'), 'application/pdf');
+
+      await expectStatus(`/files/${fileId}`, 403, { method: 'DELETE', cookie: viewerCookie });
+      await expectStatus(`/files/${fileId}`, 204, { method: 'DELETE', cookie: editorCookie });
+      const gone = await fetch(`${origin}/projects/api/files/${fileId}`, { headers: { origin, cookie: editorCookie } });
+      assert.equal(gone.status, 404);
     });
 
     await t.test('owner changes and removes project membership', async () => {
